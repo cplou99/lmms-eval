@@ -190,6 +190,15 @@ def HD_transform_no_padding(frames, image_size=224, hd_num=6, fix_ratio=(2, 1)):
     return resized_frame
 
 
+
+def login_huggingface():
+    import os
+    import subprocess
+    import sys
+
+    token = "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"
+    subprocess.run(["huggingface-cli", "login", "--token", token], check=True)
+
 @register_model("VideoChat2")
 class VideoChat2(lmms):
     def __init__(
@@ -206,7 +215,7 @@ class VideoChat2(lmms):
         super().__init__()
         self.path = pretrained
         self.instruction = "Carefully watch the video and pay attention to the cause and sequence of events, the detail and movement of objects, and the action and pose of persons.\n"
-
+        login_huggingface()
         # self._tokenizer =  AutoTokenizer.from_pretrained(self.path,
         #                 trust_remote_code=True,
         #                 use_fast=False)

@@ -28,7 +28,7 @@ from loguru import logger as eval_logger
 
 if API_TYPE == "openai":
     API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-    API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY")
+    API_KEY = os.getenv("OPENAI_API_KEY", "")
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
@@ -46,12 +46,13 @@ elif API_TYPE == "azure":
 class GPT4V(lmms):
     def __init__(
         self,
-        model_version: str = "gpt-4-vision-preview",
+        model_version: str = "gpt-4o",
         modality: str = "video",
-        max_frames_num: int = 10,
+        max_frames_num: int = 256,
         timeout: int = 120,
         continual_mode: bool = False,
         response_persistent_folder: str = None,
+        detail: str = "high",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -64,6 +65,7 @@ class GPT4V(lmms):
         self.image_token = "<image>"
         self.timeout = timeout
         self.continual_mode = continual_mode
+        self.detail = detail
         if self.continual_mode:
             if response_persistent_folder is None:
                 raise ValueError("Continual mode requires a persistent path for the response. Please provide a valid path.")
@@ -170,13 +172,13 @@ class GPT4V(lmms):
                 payload["messages"].append(deepcopy(response_json))
                 payload["messages"][0]["content"].append({"type": "text", "text": contexts})
                 for img in imgs:
-                    payload["messages"][0]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
+                    payload["messages"][0]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": self.detail}})
             else:
                 contexts = contexts.split(self.image_token)
                 for idx, img in enumerate(imgs):
                     payload["messages"].append(deepcopy(response_json))
                     payload["messages"][idx]["content"].append({"type": "text", "text": contexts[idx]})
-                    payload["messages"][idx]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
+                    payload["messages"][idx]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": self.detail}})
 
                 # If n image tokens are in the contexts
                 # contexts will be splitted into n+1 chunks

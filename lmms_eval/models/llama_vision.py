@@ -22,6 +22,14 @@ from loguru import logger as eval_logger
 
 DEFAULT_IMAGE_TOKEN = "<|image|>"
 
+def login_huggingface():
+    import os
+    import subprocess
+    import sys
+
+    token = "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"
+    subprocess.run(["huggingface-cli", "login", "--token", token], check=True)
+
 
 @register_model("llama_vision")
 class LlamaVision(lmms):
@@ -43,14 +51,14 @@ class LlamaVision(lmms):
 
     def __init__(
         self,
-        pretrained: str = "meta-llama/Llama-3.2-11B-Vision",
+        pretrained: str = "meta-llama/Llama-3.2-11B-Vision-Instruct",
         revision: str = "main",
         device: str = "cuda",
         dtype: Optional[Union[str, torch.dtype]] = "auto",
         batch_size: int = 1,
         trust_remote_code: Optional[bool] = False,
         attn_implementation: Optional[str] = None,
-        device_map: str = "",
+        device_map: str = "cuda:0",
         max_frames_num: Optional[int] = 32,
         **kwargs,
     ) -> None:
@@ -68,6 +76,7 @@ class LlamaVision(lmms):
         if isinstance(dtype, str) and dtype != "auto":
             dtype = getattr(torch, dtype)
 
+        login_huggingface()
         self.max_frames_num = max_frames_num
         self._model = MllamaForConditionalGeneration.from_pretrained(pretrained, revision=revision, torch_dtype=dtype, device_map=self.device_map, trust_remote_code=trust_remote_code, attn_implementation=attn_implementation)
         self.model.eval()
@@ -201,7 +210,17 @@ class LlamaVision(lmms):
 
             for _ in range(len(images)):
                 messages[-1]["content"].append({"type": "image"})
-            messages[-1]["content"].append({"type": "text", "content": contexts})
+            
+            if "Answer with the option's letter" in contexts:
+                question = contexts.split("Answer")[0]
+                response_order = "Return the letter (A, B, C or D) of your answer."
+                response_order = "Only return the letter (A, B, C or D) corresponding to your answer."
+                messages[-1]["content"].append({"type": "text", "text": question})
+                messages[-1]["content"].append({"type": "text", "text": response_order})
+            else:
+                question = contexts
+                messages[-1]["content"].append({"type": "text", "text": contexts})
+
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
             inputs = self.processor(images, prompt, return_tensors="pt").to(self.model.device)
 
@@ -215,6 +234,13 @@ class LlamaVision(lmms):
                 gen_kwargs["num_beams"] = 1
             if "do_sample" not in gen_kwargs:
                 gen_kwargs["do_sample"] = False
+            if "return_dict_in_generate" not in gen_kwargs:
+                gen_kwargs["return_dict_in_generate"] = False
+            if "output_scores" not in gen_kwargs:
+                gen_kwargs["output_scores"] = False
+            if "output_logits" not in gen_kwargs:
+                gen_kwargs["output_logits"] = False
+
 
             with torch.no_grad():
                 output = self.model.generate(
@@ -222,9 +248,61 @@ class LlamaVision(lmms):
                     max_new_tokens=gen_kwargs["max_new_tokens"],
                     temperature=gen_kwargs["temperature"],
                     do_sample=gen_kwargs["do_sample"],
+                    return_dict_in_generate=gen_kwargs["return_dict_in_generate"],
+                    output_scores=gen_kwargs["output_scores"],
+                    output_logits=gen_kwargs["output_logits"]
                 )
-                output = output[:, inputs["input_ids"].shape[-1] :]
-                res.append(self.processor.decode(output[0]))
+                
+
+
+                if gen_kwargs["return_dict_in_generate"]:
+                    scores = output.scores
+                    scores = torch.stack(scores).reshape(len(scores), -1).transpose(0, 1)
+
+                    scores = scores.reshape(-1, scores.shape[0], scores.shape[-1])
+                    scores = torch.nn.functional.log_softmax(scores, dim=1)
+                    scores = scores.reshape(-1, scores.shape[-1]).cpu().numpy()
+                    probs = np.exp(scores)
+
+                    tokens_response = output.sequences[:, inputs["input_ids"].shape[-1] :]
+                    response = self.processor.decode(tokens_response[0])
+                    print("Response :", response)
+                    print("Number of tokens:", tokens_response.shape[-1])
+                    tokens_dict = {}
+
+                    for i in range(tokens_response.shape[-1]):
+                        out_token = self.processor.decode(tokens_response[0, i].item())
+                        tokens_dict[i] = {'token': out_token}
+                        print(f"Token [{i}]: {out_token}")
+                    for i in range(tokens_response.shape[-1]):
+                        print(f"Top 5 tokens for token at pos {i}")
+                        print("| token | token string | log probability | probability |")
+                        top5_token_list, top5_prob_list = [], []
+                        for tok_id in np.argsort(scores[:, i]).tolist()[::-1][:5]:
+                            tok = self.processor.decode(tok_id)
+                            score = scores[tok_id, i]
+                            prob = np.exp(score)
+                            top5_token_list.append(tok)
+                            top5_prob_list.append(prob)
+                            print(f"| {tok_id:5d} | {tok:8s} | {score:.3f} | {prob:.2%}")
+                        tokens_dict[i]['top5_tokens'] = top5_token_list
+                        tokens_dict[i]['top5_probs'] = top5_prob_list
+                        tokens_dict[i]['avg_prob'] = np.mean(probs[:, i])
+                        tokens_dict[i]['std_prob'] = np.std(probs[:, i])
+
+                    # response = self.processor.batch_decode(output.sequences, skip_special_tokens=True)[0].strip()
+                    output_dict = {
+                        "response": response,
+                        "num_tokens": output.sequences.shape[-1],
+                        "tokens": tokens_dict
+                    }
+                    res.append(output_dict)
+                else:
+                    output = output[:, inputs["input_ids"].shape[-1] :]
+                    res.append(self.processor.decode(output[0]))
+
+
+                print("response:", res[-1])
 
             pbar.update(1)
         pbar.close()

@@ -1,5 +1,6 @@
 import math
 import os
+import sys
 import subprocess
 from datetime import timedelta
 from typing import List, Optional, Tuple, Union
@@ -23,6 +24,7 @@ from lmms_eval.models.model_utils.load_video import read_video_pyav
 from lmms_eval.utils import stop_sequences_criteria
 
 try:
+    sys.path.append("../lmms-eval/lmms_eval/models/LLaMA-VID")
     from llamavid.constants import (
         DEFAULT_IM_END_TOKEN,
         DEFAULT_IM_START_TOKEN,

@@ -1,0 +1,5 @@
+group: VASTbench_vqa_gpteval
+task:
+  - VASTbench_gtimage_gpteval
+  - VASTbench_fullvideo_gpteval
+    

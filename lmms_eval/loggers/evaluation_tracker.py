@@ -182,6 +182,7 @@ class EvaluationTracker:
             datetime_str (str): The datetime string to use for the results file.
         """
         self.general_config_tracker.log_end_time()
+        
 
         if self.output_path:
             try:
@@ -197,6 +198,7 @@ class EvaluationTracker:
                 # update initial results dict
                 results.update({"task_hashes": task_hashes})
                 results.update(asdict(self.general_config_tracker))
+                # results["seconds_per_question"] = round(float(results["total_evaluation_time_seconds"]) / results["n-samples"]["VASTbench_gtimage"]["effective"], 5)
                 dumped = json.dumps(
                     results,
                     indent=2,
@@ -210,6 +212,7 @@ class EvaluationTracker:
 
                 self.date_id = datetime_str.replace(":", "-")
                 file_results_aggregated = path.joinpath(f"{self.date_id}_results.json")
+                print("Saving path at: ", file_results_aggregated)
                 file_results_aggregated.open("w", encoding="utf-8").write(dumped)
 
                 if self.api and self.push_results_to_hub:

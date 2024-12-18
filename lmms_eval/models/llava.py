@@ -18,6 +18,7 @@ from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
 from lmms_eval.utils import stop_sequences_criteria
+from lmms_eval.load_frames import load_image, load_video
 
 warnings.filterwarnings("ignore")
 
@@ -65,6 +66,7 @@ class Llava(lmms):
         tie_weights: bool = True,
         truncate_context=False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         customized_config=None,  # ends in json
+        max_frames_num=32,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -84,6 +86,7 @@ class Llava(lmms):
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
+        self.max_frames_num = max_frames_num
         llava_model_args = {
             "multimodal": True,
         }
@@ -312,6 +315,18 @@ class Llava(lmms):
             flattened_visuals = self.flatten(batched_visuals)  # [B*N]
             # we assume all gen kwargs in the batch are the same
             # this is safe to assume because the `grouper` object ensures it.
+            
+            if type(flattened_visuals[0]) is str:
+                ext = flattened_visuals[0].split(".")[-1]
+                if ext in ["jpg", "png", "jpeg"]:
+                    flattened_visuals = [load_image(flattened_visuals[i]) for i in range(len(flattened_visuals))]
+                elif ext in ["mp4", "avi", "mkv"]:
+                    flattened_visuals = [load_video(flattened_visuals[i], self.max_frames_num) for i in range(len(flattened_visuals))]
+                else:
+                    raise ValueError(f"Invalid file extension: {ext}")        
+            
+                flattened_visuals = self.flatten(flattened_visuals)
+                
             gen_kwargs = all_gen_kwargs[0]
 
             # Set default values for until and max_new_tokens

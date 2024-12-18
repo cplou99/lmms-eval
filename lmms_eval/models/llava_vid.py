@@ -498,6 +498,12 @@ class LlavaVid(lmms):
                 gen_kwargs["top_p"] = None
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
+            if "return_dict_in_generate" not in gen_kwargs:
+                gen_kwargs["return_dict_in_generate"] = False
+            if "output_scores" not in gen_kwargs:
+                gen_kwargs["output_scores"] = False
+            if "output_logits" not in gen_kwargs:
+                gen_kwargs["output_logits"] = False
 
             # import pdb;pdb.set_trace()
             with torch.inference_mode():
@@ -513,15 +519,60 @@ class LlavaVid(lmms):
                     top_p=gen_kwargs["top_p"],
                     num_beams=gen_kwargs["num_beams"],
                     max_new_tokens=gen_kwargs["max_new_tokens"],
+                    return_dict_in_generate=gen_kwargs["return_dict_in_generate"],
+                    output_scores=gen_kwargs["output_scores"],
+                    output_logits=gen_kwargs["output_logits"]
                 )
                 # output_ids_2 = self.model.generate(inputs=input_ids, images=videos, attention_mask=attention_masks, modalities="video", do_sample=False, max_new_tokens=50,stopping_criteria=[stopping_criteria])
                 # output_ids = self.model.generate(inputs=input_ids, images=videos, attention_mask=attention_masks, modalities="video", do_sample=True, temperature=0.2, max_new_tokens=50,use_cache=True)
 
-            outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-            eval_logger.debug(f"Question: {cur_prompt}")
-            eval_logger.debug(f"Answer: {outputs}")
-            # import pdb;pdb.set_trace()
-            res.append(outputs)
+            if gen_kwargs["return_dict_in_generate"]:
+                scores = output_ids.scores
+                scores = torch.stack(scores).reshape(len(scores), -1).transpose(0, 1)
+
+                scores = scores.reshape(-1, scores.shape[0], scores.shape[-1])
+                scores = torch.nn.functional.log_softmax(scores, dim=1)
+                scores = scores.reshape(-1, scores.shape[-1]).cpu().numpy()
+                probs = np.exp(scores)
+
+                print("Response without skipping special tokens:", self.tokenizer.batch_decode(output_ids.sequences, skip_special_tokens=False)[0].strip())
+                print("Number of tokens:", output_ids.sequences.shape[-1])
+                tokens_dict = {}
+                for i in range(output_ids.sequences.shape[-1]):
+                    out_token = self.tokenizer.decode(output_ids.sequences[0, i].item())
+                    tokens_dict[i] = {'token': out_token}
+                    print(f"Token [{i}]: {out_token}")
+                for i in range(output_ids.sequences.shape[-1]):
+                    print(f"Top 5 tokens for token at pos {i}")
+                    print("| token | token string | log probability | probability |")
+                    top5_token_list, top5_prob_list = [], []
+                    for tok_id in np.argsort(scores[:, i]).tolist()[::-1][:5]:
+                        tok = self.tokenizer.decode(tok_id)
+                        score = scores[tok_id, i]
+                        prob = np.exp(score)
+                        top5_token_list.append(tok)
+                        top5_prob_list.append(prob)
+                        print(f"| {tok_id:5d} | {tok:8s} | {score:.3f} | {prob:.2%}")
+                    tokens_dict[i]['top5_tokens'] = top5_token_list
+                    tokens_dict[i]['top5_probs'] = top5_prob_list
+                    tokens_dict[i]['avg_prob'] = np.mean(probs[:, i])
+                    tokens_dict[i]['std_prob'] = np.std(probs[:, i])
+
+                response = self.tokenizer.batch_decode(output_ids.sequences, skip_special_tokens=True)[0].strip()
+                output_dict = {
+                    "response": response,
+                    "num_tokens": output_ids.sequences.shape[-1],
+                    "tokens": tokens_dict
+                }
+                output_ids = output_ids.sequences
+                res.append(output_dict)
+            else:
+                outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+                eval_logger.debug(f"Question: {cur_prompt}")
+                eval_logger.debug(f"Answer: {outputs}")
+                # import pdb;pdb.set_trace()
+                res.append(outputs)
+                
             pbar.update(1)
         return res
 

@@ -20,7 +20,7 @@ try:
 
     NUM_SECONDS_TO_SLEEP = 30
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    genai.configure(api_key=GOOGLE_API_KEY)
+    genai.configure(api_key="AIzaSyAzZNhVX90g_G_BFZ0cKGeZ3pVc0R8Ai6Y")
 
 except Exception as e:
     eval_logger.error(f"Error importing generativeai: {str(e)}")

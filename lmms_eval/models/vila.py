@@ -23,6 +23,8 @@ from lmms_eval.api.registry import register_model
 eval_logger = logging.getLogger("lmms-eval")
 # import sys;sys.path.append("llava-video")
 try:
+    import sys
+    sys.path.append("../lmms-eval/lmms_eval/models/VILA")
     from llava.constants import (
         DEFAULT_IM_END_TOKEN,
         DEFAULT_IM_START_TOKEN,
@@ -30,7 +32,7 @@ try:
         IMAGE_TOKEN_INDEX,
     )
     from llava.conversation import SeparatorStyle, conv_templates
-    from llava.data.dataset import LazySupervisedDataset
+    # from llava.data.dataset import LazySupervisedDataset
     from llava.mm_utils import (
         KeywordsStoppingCriteria,
         get_model_name_from_path,
@@ -85,7 +87,7 @@ class VILA(lmms):
         self.model_name = get_model_name_from_path(pretrained)
         self.max_frames_num = max_frames_num
         # self._config = AutoConfig.from_pretrained(self.pretrained)
-
+        import llava
         self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, self.model_name, device_map=self.device_map, attn_implementation=attn_implementation)
 
         self.model.image_processor = self._image_processor

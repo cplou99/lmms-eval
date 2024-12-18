@@ -1,0 +1,28 @@
+dataset_path: ../VASTbench_lmmseval
+dataset_kwargs:
+  token: True
+  cache_dir: VASTbench
+  force_download: False
+  local_files_only: True
+  load_from_disk: True
+test_split: test
+
+task: VASTbench_gt1mininterval
+doc_to_visual: !function utils.VASTbench_doc_to_visual_gt1mininterval
+doc_to_text: !function utils.VASTbench_doc_to_text
+doc_to_target: "gt_option"
+generation_kwargs:
+  max_new_tokens: 32
+  temperature: 0
+  do_sample: False
+process_results: !function utils.VASTbench_process_results
+metric_list:
+  - metric: acc
+    aggregation: !function utils.VASTbench_aggregate_results
+    higher_is_better: true
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: "Answer with the option's letter from the given choices directly.\n"
+    

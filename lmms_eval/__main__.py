@@ -83,22 +83,22 @@ def _handle_non_serializable(o):
 def parse_eval_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", default="", help="Path to a yaml file specifying all eval arguments, will ignore cli arguments if specified")
-    parser.add_argument("--model", default="hf", help="Name of model e.g. `hf`")
+    parser.add_argument("--model", default="video_llava", help="Name of model e.g. `hf`")
     parser.add_argument(
         "--tasks",
-        default=None,
+        default="VASTbench_vqa",
         help="To get full list of tasks, use the command lmms-eval --tasks list",
     )
     parser.add_argument(
         "--model_args",
-        default="",
+        default="pretrained=LanguageBind/Video-LLaVA-7B-hf",
         help="String arguments for model, e.g. `pretrained=EleutherAI/pythia-160m,dtype=float32`",
     )
     parser.add_argument(
         "--num_fewshot",
         type=int,
         default=None,
-        help="Number of examples in few-shot context",
+        help="Number of examples in few-shot context"
     )
     parser.add_argument(
         "--batch_size",
@@ -118,12 +118,12 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         type=str,
-        default=None,
+        default="cuda",
         help="Device to use (e.g. cuda, cuda:0, cpu)",
     )
     parser.add_argument(
         "--output_path",
-        default=None,
+        default="/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/",
         type=str,
         metavar="= [dir/file.jsonl] [DIR]",
         help="The path to the output file where the result metrics will be saved. If the path is a directory and log_samples is true, the results will be saved in the directory. Else the parent directory will be used.",
@@ -164,7 +164,7 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument(
         "--log_samples",
         action="store_true",
-        default=False,
+        default=True,
         help="If True, write out all model outputs and documents for per-sample measurement and post-hoc analysis",
     )
     parser.add_argument(
@@ -176,7 +176,7 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument(
         "--log_samples_suffix",
         type=str,
-        default="model_outputs",
+        default="llava_onevision.VASTbench",
         help="Specify a suffix for the log_samples file name.",
     )
     parser.add_argument(
@@ -279,7 +279,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         print("│ `lmms-eval --model llava --model_path liuhaotian/llava-v1.6-7b --tasks okvqa` │")
         print("│ Use `lmms-eval --help` for more information.                                  │")
         print("└───────────────────────────────────────────────────────────────────────────────┘")
-        sys.exit(1)
+        # sys.exit(1)
 
     if args.wandb_args:
         if "name" not in args.wandb_args:

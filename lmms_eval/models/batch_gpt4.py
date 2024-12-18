@@ -34,14 +34,14 @@ NUM_SECONDS_TO_SLEEP = 5
 
 if API_TYPE == "openai":
     API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-    API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY")
+    API_KEY = os.getenv("OPENAI_API_KEY", "")
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
     }
 elif API_TYPE == "azure":
     API_URL = os.getenv("AZURE_ENDPOINT", "https://api.cognitive.microsoft.com/sts/v1.0/issueToken")
-    API_KEY = os.getenv("AZURE_API_KEY", "YOUR_API_KEY")
+    API_KEY = os.getenv("AZURE_API_KEY", "")
     headers = {
         "api-key": API_KEY,
         "Content-Type": "application/json",
@@ -203,5 +203,5 @@ class BatchGPT4(lmms):
     def list_batches(self, limit=10):
         return self.client.batches.list(limit=limit)
 
-    def generate_until_multi_round(self, requests) -> List[str]:
+    def generate_until_multi_round(self, requests) -> list[str]:
         raise NotImplementedError("TODO: Implement multi-round generation for BatchGPT4")

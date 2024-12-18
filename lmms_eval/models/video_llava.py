@@ -20,6 +20,8 @@ eval_logger = logger
 
 from transformers import VideoLlavaForConditionalGeneration, VideoLlavaProcessor
 
+#from videollava.model.builder import load_pretrained_model
+#from videollava.mm_utils import get_model_name_from_path, tokenizer_image_token
 from lmms_eval.models.model_utils.load_video import read_video_pyav
 
 
@@ -40,6 +42,7 @@ class VideoLLaVA(lmms):
         device_map="cuda:0",
         conv_template="llava_v1",
         use_cache=True,
+        load_in_8bit=False,
         truncate_context=False,
         num_frames: int = 8,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         **kwargs,
@@ -58,14 +61,14 @@ class VideoLLaVA(lmms):
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
         self.pretrained = pretrained
-        self._model = VideoLlavaForConditionalGeneration.from_pretrained(pretrained)
+        self._model = VideoLlavaForConditionalGeneration.from_pretrained(pretrained, torch_dtype=torch.float16)
         self._processor = VideoLlavaProcessor.from_pretrained(pretrained)
         self.prompt = "USER: <video>{}? ASSISTANT:"
         self.num_frames = num_frames
         assert num_frames == 8, "num_frames must be 8 https://github.com/huggingface/transformers/blob/bdb9106f247fca48a71eb384be25dbbd29b065a8/src/transformers/models/video_llava/modeling_video_llava.py#L379"
-        # self.model_name = get_model_name_from_path(pretrained)
-        # self._tokenizer, self._model, self.processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device_map)
-        # self.video_processor = self.processor["video"]
+        #self.model_name = get_model_name_from_path(pretrained)
+        #self._tokenizer, self._model, self.processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device_map)
+        #self.video_processor = self.processor["video"]
         self._config = self._model.config
         self.model.eval()
         self.model.tie_weights()

@@ -737,8 +737,10 @@ class ConfigurableTask(Task):
             self.sampler = samplers.get_sampler(self.config.fewshot_config.get("sampler", "default") if self.config.fewshot_config else "default")(list(self.fewshot_docs()), self, rnd=random.Random(1234))
 
         if self.has_test_docs():
+            print("Self test docs", self.test_docs())
             self.task_docs = self.test_docs()
         elif self.has_validation_docs():
+            print("Self validation docs", self.validation_docs())
             self.task_docs = self.validation_docs()
         else:
             assert False, f"Task dataset (path={self.DATASET_PATH}, name={self.DATASET_NAME}) must have valid or test docs!"
@@ -1034,12 +1036,19 @@ class ConfigurableTask(Task):
             if "create_link" in dataset_kwargs:
                 dataset_kwargs.pop("create_link")
 
+        print("dataset kwargs", dataset_kwargs)
         if dataset_kwargs is not None and "load_from_disk" in dataset_kwargs and dataset_kwargs["load_from_disk"]:
             dataset_kwargs.pop("load_from_disk")
             # using local task in offline environment, need to process the online dataset into local format via
             # `ds = load_datasets("lmms-lab/MMMU")`
+            print("--------------Loading dataset from disk----------------")
             self.dataset = datasets.load_from_disk(path=self.DATASET_PATH, name=self.DATASET_NAME)
         else:
+            print("DATASET_PATH", self.DATASET_PATH)
+            print("DATASET_NAME", self.DATASET_NAME)
+            print("download_mode", datasets.DownloadMode.REUSE_DATASET_IF_EXISTS)
+            print("download_config", download_config)
+            print("dataset_kwargs", dataset_kwargs)
             self.dataset = datasets.load_dataset(
                 path=self.DATASET_PATH,
                 name=self.DATASET_NAME,
@@ -1411,9 +1420,9 @@ class ConfigurableTask(Task):
     # TODO: we add a full_docs interface here for some evaluations that needs to access the full datasets during process_results function. we may have better ways to handle this.
     @retry(stop=(stop_after_attempt(5) | stop_after_delay(1200)), wait=wait_fixed(2))
     def process_results(self, doc, results, full_docs=None):
-        if self.OUTPUT_TYPE == "generate_until":
+        if self.OUTPUT_TYPE == "generate_until" and type(results[0]) == str:
             results[0] = results[0].strip()
-
+        
         kwargs = {}
         if full_docs is not None:
             kwargs["full_docs"] = full_docs

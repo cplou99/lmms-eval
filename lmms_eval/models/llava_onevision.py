@@ -538,7 +538,7 @@ class Llava_OneVision(lmms):
                 keywords = [stop_str]
                 stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
                 gen_kwargs["modalities"] = ["video"]
-                gen_kwargs["stopping_criteria"] = [stopping_criteria]
+                # gen_kwargs["stopping_criteria"] = [stopping_criteria]
                 self._config.mm_spatial_pool_stride = self.mm_spatial_pool_stride
                 self._config.mm_spatial_pool_mode = self.mm_spatial_pool_mode
 
@@ -556,6 +556,7 @@ class Llava_OneVision(lmms):
                 raise e
 
             text_outputs = [response.strip() for response in text_outputs]
+            print("Question:", question, "answer:", text_outputs)
             res.extend(text_outputs)
             self.cache_hook.add_partial("generate_until", (context, gen_kwargs), text_outputs)
             pbar.update(1)

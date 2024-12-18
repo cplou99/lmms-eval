@@ -1,0 +1,6 @@
+group: VASTbench_vqa
+task:
+  - VASTbench_gt1mininterval
+  - VASTbench_gtinterval
+  - VASTbench_fullvideo
+    

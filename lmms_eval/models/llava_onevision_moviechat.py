@@ -38,21 +38,26 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 # Import LLaVA modules
 try:
-    from llava.constants import (
+    import sys
+    import importlib
+    import llava
+    sys.path.insert(0, "/home/cplou/PycharmProjects/VLM/lmms-eval/lmms_eval/models/MovieChat/MovieChat_Onevision/")
+    importlib.reload(llava)
+    from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.constants import (
         DEFAULT_IM_END_TOKEN,
         DEFAULT_IM_START_TOKEN,
         DEFAULT_IMAGE_TOKEN,
         IGNORE_INDEX,
         IMAGE_TOKEN_INDEX,
     )
-    from llava.conversation import SeparatorStyle, conv_templates
-    from llava.mm_utils import (
+    from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.conversation import SeparatorStyle, conv_templates
+    from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.mm_utils import (
         KeywordsStoppingCriteria,
         get_model_name_from_path,
         process_images,
         tokenizer_image_token,
     )
-    from llava.model.builder import load_pretrained_model
+    from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.model.builder import load_pretrained_model
 except ImportError as e:
     eval_logger.debug(f"LLaVA_NeXT is not installed. Please install llava from `https://github.com/rese1f/MovieChat.git` to use this model.\nError: {e}")
 
@@ -153,7 +158,7 @@ class Llava_OneVision_MovieChat(lmms):
                 overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
 
         llava_model_args["overwrite_config"] = overwrite_config
-        from LLaVA_NeXT.llava.model.builder import load_pretrained_model
+        from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.model.builder import load_pretrained_model
 
         try:
             # Try to load the model with the multimodal argument
@@ -389,7 +394,9 @@ class Llava_OneVision_MovieChat(lmms):
                             frames = list(video.subclip(start_time, end_time).iter_frames(fps=self.sliding_window_length / clip_duration))[: self.sliding_window_length]
                             frames = [Image.fromarray(frame).convert("RGB") for frame in frames]
                             preprocess_frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
-                            encoded_window = self.model.encode_images(preprocess_frames)  # [frames, 729,3584]
+                            with torch.no_grad():
+                                encoded_window = self.model.encode_images(preprocess_frames).cpu() # [frames, 729,3584]
+                            preprocess_frames.cpu()
 
                             for frame in encoded_window:
                                 if cur_frame < (self.short_memory_length - self.merge_frame_length):
@@ -404,26 +411,34 @@ class Llava_OneVision_MovieChat(lmms):
                                 # merge short_memory_frames
                                 similar_list = []
                                 for frame_i in range(len(self.short_memory_buffer) - 1):
-                                    scores = self.short_memory_buffer[frame_i] @ self.short_memory_buffer[frame_i + 1].transpose(-1, -2)
-                                    frame_silimar = torch.mean(scores)
+                                    first = self.short_memory_buffer[frame_i]
+                                    second = self.short_memory_buffer[frame_i + 1]
+                                    scores = first.cuda() @ second.transpose(-1, -2).cuda()
+                                    frame_silimar = torch.mean(scores).cpu()
                                     similar_list.append(frame_silimar)
+ 
 
                                 while len(self.short_memory_buffer) > self.merge_frame_length:
                                     max_value = max(similar_list)
                                     max_index = similar_list.index(max_value)
                                     new_frame_feature = (self.short_memory_buffer[max_index].cpu() + self.short_memory_buffer[max_index + 1].cpu()) / 2
-                                    self.short_memory_buffer[max_index] = new_frame_feature.cuda()
+                                    self.short_memory_buffer[max_index] = new_frame_feature
                                     del self.short_memory_buffer[max_index + 1]
                                     similar_list = []
                                     for frame_i in range(len(self.short_memory_buffer) - 1):
-                                        scores = self.short_memory_buffer[frame_i] @ self.short_memory_buffer[frame_i + 1].transpose(-1, -2)
-                                        frame_silimar = torch.mean(scores)
+                                        first = self.short_memory_buffer[frame_i]
+                                        second = self.short_memory_buffer[frame_i + 1]
+                                        scores = first.cuda() @ second.cuda().transpose(-1, -2)
+                                        frame_silimar = torch.mean(scores).cpu()
                                         similar_list.append(frame_silimar)
+                                        
 
                                 for frame in self.short_memory_buffer:
                                     self.long_memory_buffer.append(frame)
-
-                        image_features = torch.stack(self.long_memory_buffer)
+                        
+                        del first, second, scores
+                        torch.cuda.empty_cache()  # Call after processing a batch or large tensor
+                        image_features = torch.stack(self.long_memory_buffer).cuda()
                     except Exception as e:
                         print(e)
                         eval_logger.error(f"Error {e} in loading video")
@@ -514,10 +529,241 @@ class Llava_OneVision_MovieChat(lmms):
             except Exception as e:
                 print(e)
                 text_outputs = "Can not infer the answer."
-
+            image_features.cpu()
             res.extend(text_outputs)
             print(text_outputs)
             self.cache_hook.add_partial("generate_until", (context, gen_kwargs), text_outputs)
+            pbar.update(1)
+            # reorder this group of results back to original unsorted form
+        res = re_ords.get_original(res)
+
+        pbar.close()
+        return res
+
+    
+    def generate_until_multi_round(self, requests: List[Instance]) -> List[str]:
+        res = []
+
+        def _collate(x):
+            # the negative sign on len(toks) sorts descending - this has a few advantages:
+            # - time estimates will always be over not underestimates, which is more useful for planning
+            # - to know the size of a batch when going through the list, you know the first one is always the batch
+            #   padded context length. this is useful to simplify the batching logic and more importantly to make
+            #   automatic adaptive batches much much easier to implement
+            # - any OOMs will happen right away rather than near the end
+            toks = self.tok_encode(x[0])
+            return -len(toks), x[0]
+
+        # we group requests by their generation_kwargs,
+        # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
+        # in the same batch.
+        metadata = requests[0].metadata
+        re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
+        chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
+        num_iters = len(requests) // self.batch_size if len(requests) % self.batch_size == 0 else len(requests) // self.batch_size + 1
+        pbar = tqdm(total=num_iters, disable=(self.rank != 0), desc="Model Responding")
+
+        origin_image_aspect_ratio = getattr(self._config, "image_aspect_ratio", None)
+
+        for chunk in chunks:
+            batched_contexts, all_gen_kwargs, batched_doc_to_visual, batched_doc_to_text, batched_doc_id, batched_task, batched_split = zip(*chunk)
+            task = batched_task[0]
+            split = batched_split[0]
+            batched_visuals = [batched_doc_to_visual[0](self.task_dict[task][split][ids]) for ids in batched_doc_id]  # [B, N]
+            assert len(batched_visuals) == 1
+
+            # we assume all gen kwargs in the batch are the same
+            # this is safe to assume because the `grouper` object ensures it.
+            gen_kwargs = all_gen_kwargs[0]
+            if "until" in gen_kwargs:
+                gen_kwargs.pop("until")
+
+            # multi round inference: terminate when receiving signal from the doc_to_text
+            round_idx = 0
+            batched_round_res = []
+            batched_previous_round_info = None
+            while True:
+                question_input = []
+
+                if round_idx != 0:  # get current round visual and context from doc_to_text function
+                    batched_visuals, batched_contexts, batched_terminal_singal, batched_round_res, batched_previous_round_info = list(
+                        zip(
+                            *[
+                                batched_doc_to_text[0](
+                                    self.task_dict[task][split][ids],
+                                    previous_output=[round_res[ids_idx] for round_res in batched_round_res],
+                                    round_idx=round_idx,
+                                    previous_round_info=batched_previous_round_info[ids_idx] if batched_previous_round_info is not None else None,
+                                )
+                                for ids_idx, ids in enumerate(batched_doc_id)
+                            ]
+                        )
+                    )
+                    # import ipdb; ipdb.set_trace()
+                    batched_round_res = list(zip(*batched_round_res))  # [(r1_1, r1_2), (r2_1, r2_2), ...]
+                    if batched_terminal_singal[0]:  # terminal signal from doc_to_text function
+                        break
+
+                for visual, context in zip(batched_visuals, batched_contexts):
+                    if len(visual) > 1 or "image_aspect_ratio" not in self._config.__dict__:  # for multi image case, we treat per image aspect ratio as "pad" by default.
+                        self._config.image_aspect_ratio = getattr(gen_kwargs, "image_aspect_ratio", "pad")
+                        eval_logger.info(f"Setting image aspect ratio: {self._config.image_aspect_ratio}")
+                    if type(visual[0]) == PIL.Image.Image and "task_type" not in metadata and "sample_frames" not in metadata:  # For image task
+                        raise NotImplementedError("MovieChat only supports video inputs.")
+
+                    elif "task_type" in metadata and metadata["task_type"] == "video" and "sample_frames" in metadata:
+                        raise NotImplementedError("MovieChat only supports video inputs.")
+
+                    elif type(visual[0]) == str:  # For video task
+                        try:
+                            self.short_memory_buffer = []
+                            self.long_memory_buffer = []
+                            # try:
+                            os.makedirs(self.tmp_folder, exist_ok=True)
+
+                            video = VideoFileClip(visual[0])
+                            clip_duration = video.duration / self.num_clips
+
+                            cur_frame = 0
+                            for i in range(self.num_clips):
+                                start_time = i * clip_duration
+                                end_time = start_time + clip_duration
+                                # uniformly sample self.sliding_window_length frames from the video from start_time to end_time
+                                frames = list(video.subclip(start_time, end_time).iter_frames(fps=self.sliding_window_length / clip_duration))[: self.sliding_window_length]
+                                frames = [Image.fromarray(frame).convert("RGB") for frame in frames]
+                                preprocess_frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
+                                encoded_window = self.model.encode_images(preprocess_frames)  # [frames, 729,3584]
+
+                                for frame in encoded_window:
+                                    if cur_frame < (self.short_memory_length - self.merge_frame_length):
+                                        if len(self.short_memory_buffer) == self.short_memory_length:
+                                            self.short_memory_buffer.pop(0)
+                                        self.short_memory_buffer.append(frame)
+                                    cur_frame += 1
+
+                                if cur_frame == (self.short_memory_length - self.merge_frame_length):
+                                    cur_frame = 0
+
+                                    # merge short_memory_frames
+                                    similar_list = []
+                                    for frame_i in range(len(self.short_memory_buffer) - 1):
+                                        scores = self.short_memory_buffer[frame_i] @ self.short_memory_buffer[frame_i + 1].transpose(-1, -2)
+                                        frame_silimar = torch.mean(scores)
+                                        similar_list.append(frame_silimar)
+
+                                    while len(self.short_memory_buffer) > self.merge_frame_length:
+                                        max_value = max(similar_list)
+                                        max_index = similar_list.index(max_value)
+                                        new_frame_feature = (self.short_memory_buffer[max_index].cpu() + self.short_memory_buffer[max_index + 1].cpu()) / 2
+                                        self.short_memory_buffer[max_index] = new_frame_feature
+                                        del self.short_memory_buffer[max_index + 1]
+                                        similar_list = []
+                                        for frame_i in range(len(self.short_memory_buffer) - 1):
+                                            scores = self.short_memory_buffer[frame_i] @ self.short_memory_buffer[frame_i + 1].transpose(-1, -2)
+                                            frame_silimar = torch.mean(scores)
+                                            similar_list.append(frame_silimar)
+
+                                    for frame in self.short_memory_buffer:
+                                        self.long_memory_buffer.append(frame)
+
+                            image_features = torch.stack(self.long_memory_buffer)
+                        except Exception as e:
+                            print(e)
+                            eval_logger.error(f"Error {e} in loading video")
+                            image_features = None
+
+                        task_type = "video"
+                        placeholder_count = len(frames) if self.token_strategy == "multiple" else 1
+
+                    if image_features is not None and DEFAULT_IMAGE_TOKEN not in context:
+                        """
+                        Three senarios:
+                        1. No image, and there for, no image token should be added.
+                        2. image token is already specified in the context, so we don't need to add it.
+                        3. image token is not specified in the context and there is image inputs, so we need to add it. In this case, we add the image token at the beginning of the context and add a new line.
+                        4. For video tasks, we could add a <image> token or multiple <image> tokens for each frame in the context. This depends on the training strategy and should balance in test to decide which is better
+                        """
+                        # if task_type == "image": # indeed in multi-image case, not the video in frames.
+                        #     image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count if isinstance(visual, list) else [DEFAULT_IMAGE_TOKEN]
+                        # elif task_type == "video":
+                        # image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count if self.token_strategy == "multiple" else [DEFAULT_IMAGE_TOKEN]
+                        image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count
+                        image_tokens = " ".join(image_tokens)
+                        question = image_tokens + "\n" + context
+                    else:
+                        question = context
+
+                    # This is much safer for llama3, as we now have some object type in it
+                    if "llama_3" in self.conv_template:
+                        conv = copy.deepcopy(conv_templates[self.conv_template])
+                    else:
+                        conv = conv_templates[self.conv_template].copy()
+
+                    if utils.is_json(question):  # conversational question input
+                        question = json.loads(question)
+                        for idx, item in enumerate(question):
+                            role = conv.roles[idx % 2]
+                            message = item["value"]
+                            conv.append_message(role, message)
+
+                        assert len(conv.messages) % 2 == 1
+                        conv.append_message(conv.roles[1], None)
+                        prompt_question = conv.get_prompt()
+                        question_input.append(prompt_question)
+                    else:  # only simple string for question
+                        conv.append_message(conv.roles[0], question)
+                        conv.append_message(conv.roles[1], None)
+                        prompt_question = conv.get_prompt()
+                        question_input.append(prompt_question)
+
+                # preconfigure gen_kwargs with defaults
+                if "max_new_tokens" not in gen_kwargs:
+                    gen_kwargs["max_new_tokens"] = 1024
+                if "temperature" not in gen_kwargs:
+                    gen_kwargs["temperature"] = 0
+                if "do_sample" not in gen_kwargs:
+                    gen_kwargs["do_sample"] = False
+                if "top_p" not in gen_kwargs:
+                    gen_kwargs["top_p"] = None
+                if "num_beams" not in gen_kwargs:
+                    gen_kwargs["num_beams"] = 1
+
+                input_ids_list = [tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt") for prompt in question_input]
+                pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+                input_ids = self.pad_sequence(input_ids_list, batch_first=True, padding_value=pad_token_ids).to(self.device)
+                attention_masks = input_ids.ne(pad_token_ids).to(self.device)
+
+                if task_type == "image":
+                    gen_kwargs["image_sizes"] = [batched_visuals[0][idx].size for idx in range(len(batched_visuals[0]))]
+                elif task_type == "video":
+                    stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+                    keywords = [stop_str]
+                    stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
+                    gen_kwargs["modalities"] = ["video"]
+                    gen_kwargs["stopping_criteria"] = [stopping_criteria]
+                    self._config.mm_spatial_pool_stride = self.mm_spatial_pool_stride
+                    self._config.mm_spatial_pool_mode = self.mm_spatial_pool_mode
+
+                # These steps are not in LLaVA's original code, but are necessary for generation to work
+                # TODO: attention to this major generation step...
+                if "image_aspect_ratio" in gen_kwargs.keys():
+                    gen_kwargs.pop("image_aspect_ratio")
+                try:
+                    with torch.inference_mode():
+                        gen_kwargs.pop("modalities")
+                        cont = self.model.generate_moviechat(input_ids, attention_mask=attention_masks, pad_token_id=pad_token_ids, image_features=image_features, use_cache=self.use_cache, **gen_kwargs)
+                    text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
+                    text_outputs = [response.strip() for response in text_outputs]
+                except Exception as e:
+                    print(e)
+                    text_outputs = "Can not infer the answer."
+
+                batched_round_res.append(text_outputs)
+
+                round_idx += 1
+
+            res.extend(list(zip(*batched_round_res)))
+            self.cache_hook.add_partial("generate_until_multi_round", (context, gen_kwargs), batched_round_res)
             pbar.update(1)
             # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)
