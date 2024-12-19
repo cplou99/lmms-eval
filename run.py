@@ -119,7 +119,12 @@ models_dict = {
         "model_args": "pretrained=Qwen/Qwen2-VL-7B-Instruct",
         "log_suffix": "qwen2.VAST"
     },
-    "gpt4_image": {
+    "gpt4o_image": {
+        "model_name": "gpt4v",
+        "model_args": "model_version=gpt-4o-2024-08-06,modality=image",
+        "log_suffix": "gpt4.VAST"
+    },
+    "gpt4o_mini_image": {
         "model_name": "gpt4v",
         "model_args": "model_version=gpt-4o-mini-2024-07-18,modality=image",
         "log_suffix": "gpt4.VAST"
@@ -134,17 +139,20 @@ models_dict = {
 # List of models to run
 all_models = ["llava_nextvideo", "videochat2_mistralHD", "videollava", "llava", "llavanext-mistral", "moviechat"]
 
-all_tasks = ["VASTbench_vqa", "VASTbench_fullvideo", "VASTbench_gtinterval", "VASTbench_gt1mininterval", "VASTbench_gtimage", "VASTbench_gtimage_gpteval"]
-tasks = ["VASTbench_gtinterval_loglikelihood_gpteval"]
+all_tasks = ["VASTbench_vqa", "VASTbench_fullvideo", "VASTbench_gtinterval", "VASTbench_gt1mininterval", "VASTbench_gtimage", "VASTbench_gtimage_gpteval", "VASTbench_gt1mininterval_gpteval"]
+tasks = ["VASTbench_gt1mininterval_gpteval", "VASTbench_gtimage_gpteval"]
+
+tasks = ["VASTbench_gt1mininterval"]
 
 # tasks = ["VASTbench_gtinterval"]
 tasks_to_models = {
     "VASTbench_vqa": ["llava_nextvideo"],
-    "VASTbench_fullvideo": ["moviechat"],
+    "VASTbench_fullvideo": ["llava_nextvideo"],
     "VASTbench_gtinterval": ["llava_nextvideo"],
-    "VASTbench_gt1mininterval": ["moviechat"],
-    "VASTbench_gtimage": ["llavanext-mistral"],
-    "VASTbench_gtimage_gpteval": ["llama", "llava", "llavanext-mistral", "llava_onevision"],
+    "VASTbench_gt1mininterval": ["llava_onevision"],
+    "VASTbench_gtimage": ["gpt4_image", "gpt4o_mini_image"],
+    "VASTbench_gtimage_gpteval": ["gpt4o_image"],
+    "VASTbench_gt1mininterval_gpteval": ["llama"],
     "VASTbench_fullvideo_gpteval": ["videochat2_mistralHD"],
     "VASTbench_gtinterval_loglikelihood": ["llama"],
     "VASTbench_gtinterval_loglikelihood_gpteval": ["llava_nextvideo"]

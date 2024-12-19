@@ -1,0 +1,31 @@
+dataset_path: ../VASTbench_lmmseval
+dataset_kwargs:
+  token: True
+  cache_dir: VASTbench
+  force_download: False
+  local_files_only: True
+  load_from_disk: True
+test_split: test
+
+task: VASTbench_gt1mininterval_gpteval
+doc_to_visual: !function utils.VASTbench_doc_to_visual_gt1mininterval
+doc_to_text: !function utils.VASTbench_doc_to_text_no_options
+doc_to_target: "answer"
+generation_kwargs:
+  until:
+    - "ASSISTANT:"
+  max_new_tokens: 128
+  temperature: 0
+  do_sample: False
+process_results: !function utils.VASTbench_process_results_gpt_eval
+metric_list:
+  - metric: gpt_eval_score_acc
+    aggregation: !function utils.VASTbench_aggregate_results_gpt_eval # parse scores from each QA pairs
+    higher_is_better: true
+
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt:  "Answer the following question based on the frames above.\n"
+    post_prompt: ""
+    

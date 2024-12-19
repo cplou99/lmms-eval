@@ -533,6 +533,8 @@ class Llava_OneVision(lmms):
 
             if task_type == "image":
                 gen_kwargs["image_sizes"] = [batched_visuals[0][idx].size for idx in range(len(batched_visuals[0]))]
+            # elif task_type == "multi-image":
+                # gen_kwargs["image_sizes"] = [[image_tensor[0].shape[-2], image_tensor[0].shape[-1]] for _ in range(image_tensor[0].shape[0])]
             elif task_type == "video":
                 stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
                 keywords = [stop_str]
