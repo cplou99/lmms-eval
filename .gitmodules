@@ -4,3 +4,6 @@
 [submodule "lmms_eval/models/LLaVA-NeXT"]
 	path = lmms_eval/models/LLaVA-NeXT
 	url = https://github.com/cplou99/LLaVA-NeXT
+[submodule "lmms_eval/models/MovieChat"]
+	path = lmms_eval/models/MovieChat
+	url = https://github.com/cplou99/MovieChat
