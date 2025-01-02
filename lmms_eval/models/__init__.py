@@ -55,6 +55,11 @@ AVAILABLE_MODELS = {
     "videochat2": "VideoChat2",
     "llama_vision": "LlamaVision",
     "aria": "Aria",
+    "vast_model": "VAST",
+    "sequential_model": "Sequential",
+    "sequential_end_model": "SequentialEnd",
+    "sampling_iterative_model": "IterativeSampling",
+    "socratic_model": "Socratic",
 }
 
 

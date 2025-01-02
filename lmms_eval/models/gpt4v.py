@@ -52,7 +52,7 @@ class GPT4V(lmms):
         timeout: int = 120,
         continual_mode: bool = False,
         response_persistent_folder: str = None,
-        detail: str = "high",
+        detail: str = "low",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -136,6 +136,72 @@ class GPT4V(lmms):
             for j in i:
                 new_list.append(j)
         return new_list
+
+    def inference(self, imgs, contexts, gen_kwargs):
+        payload = {"messages": []}
+        if API_TYPE == "openai":
+            payload["model"] = self.model_version
+
+        response_json = {"role": "user", "content": []}
+        # When there is no image token in the context, append the image to the text
+        if self.image_token not in contexts:
+            payload["messages"].append(deepcopy(response_json))
+            payload["messages"][0]["content"].append({"type": "text", "text": contexts})
+            for img in imgs:
+                payload["messages"][0]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": self.detail}})
+        else:
+            contexts = contexts.split(self.image_token)
+            for idx, img in enumerate(imgs):
+                payload["messages"].append(deepcopy(response_json))
+                payload["messages"][idx]["content"].append({"type": "text", "text": contexts[idx]})
+                payload["messages"][idx]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}", "detail": self.detail}})
+
+            # If n image tokens are in the contexts
+            # contexts will be splitted into n+1 chunks
+            # Manually add it into the payload
+            payload["messages"].append(deepcopy(response_json))
+            payload["messages"][-1]["content"].append({"type": "text", "text": contexts[-1]})
+
+        if "max_new_tokens" not in gen_kwargs:
+            gen_kwargs["max_new_tokens"] = 1024
+        if gen_kwargs["max_new_tokens"] > 4096:
+            gen_kwargs["max_new_tokens"] = 4096
+        if "temperature" not in gen_kwargs:
+            gen_kwargs["temperature"] = 0
+        if "top_p" not in gen_kwargs:
+            gen_kwargs["top_p"] = None
+        if "num_beams" not in gen_kwargs:
+            gen_kwargs["num_beams"] = 1
+
+        payload["max_tokens"] = gen_kwargs["max_new_tokens"]
+        payload["temperature"] = gen_kwargs["temperature"]
+
+        for attempt in range(5):
+            try:
+                response = url_requests.post(API_URL, headers=headers, json=payload, timeout=self.timeout)
+                response_data = response.json()
+
+                response_text = response_data["choices"][0]["message"]["content"].strip()
+                break  # If successful, break out of the loop
+
+            except Exception as e:
+                try:
+                    error_msg = response.json()
+                except:
+                    error_msg = ""
+
+                eval_logger.info(f"Attempt {attempt + 1} failed with error: {str(e)}.\nReponse: {error_msg}")
+                if attempt <= 5:
+                    time.sleep(NUM_SECONDS_TO_SLEEP)
+                else:  # If this was the last attempt, log and return empty string
+                    eval_logger.error(f"All 5 attempts failed. Last error message: {str(e)}.\nResponse: {response.json()}")
+                    response_text = ""
+        
+        response_dict = {"response": response_text,
+                         "tokens_usage": response_data["usage"]["prompt_tokens"]}
+        
+        return response_dict
+
 
     def generate_until(self, requests) -> List[str]:
         res = []

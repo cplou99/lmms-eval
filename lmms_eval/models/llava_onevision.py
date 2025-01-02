@@ -568,6 +568,155 @@ class Llava_OneVision(lmms):
         pbar.close()
         return res
 
+    def inference(self, frames, context, gen_kwargs):
+        image_tensor, question_input = [], []
+        frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
+        image_tensor.append(frames)
+
+        if frames.shape[0] == 1:
+            task_type = "image"
+        else:
+            task_type = "video"
+        placeholder_count = len(frames) if self.token_strategy == "multiple" else 1
+
+        if image_tensor is not None and len(image_tensor) != 0 and DEFAULT_IMAGE_TOKEN not in context:
+            """
+            Three senarios:
+            1. No image, and there for, no image token should be added.
+            2. image token is already specified in the context, so we don't need to add it.
+            3. image token is not specified in the context and there is image inputs, so we need to add it. In this case, we add the image token at the beginning of the context and add a new line.
+            4. For video tasks, we could add a <image> token or multiple <image> tokens for each frame in the context. This depends on the training strategy and should balance in test to decide which is better
+            """
+            # if task_type == "image": # indeed in multi-image case, not the video in frames.
+            #     image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count if isinstance(visual, list) else [DEFAULT_IMAGE_TOKEN]
+            # elif task_type == "video":
+            # image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count if self.token_strategy == "multiple" else [DEFAULT_IMAGE_TOKEN]
+            image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count
+            image_tokens = " ".join(image_tokens)
+            question = image_tokens + "\n" + context
+        else:
+            question = context
+
+        # This is much safer for llama3, as we now have some object type in it
+        if "llama_3" in self.conv_template:
+            conv = copy.deepcopy(conv_templates[self.conv_template])
+        else:
+            conv = conv_templates[self.conv_template].copy()
+
+        if utils.is_json(question):  # conversational question input
+            question = json.loads(question)
+            for idx, item in enumerate(question):
+                role = conv.roles[idx % 2]
+                message = item["value"]
+                conv.append_message(role, message)
+
+            assert len(conv.messages) % 2 == 1
+            conv.append_message(conv.roles[1], None)
+            prompt_question = conv.get_prompt()
+            question_input.append(prompt_question)
+        else:  # only simple string for question
+            conv.append_message(conv.roles[0], question)
+            conv.append_message(conv.roles[1], None)
+            prompt_question = conv.get_prompt()
+            question_input.append(prompt_question)
+
+        # preconfigure gen_kwargs with defaults
+        if "max_new_tokens" not in gen_kwargs:
+            gen_kwargs["max_new_tokens"] = 1024
+        if "temperature" not in gen_kwargs:
+            gen_kwargs["temperature"] = 0
+        if "do_sample" not in gen_kwargs:
+            gen_kwargs["do_sample"] = False
+        if "top_p" not in gen_kwargs:
+            gen_kwargs["top_p"] = None
+        if "num_beams" not in gen_kwargs:
+            gen_kwargs["num_beams"] = 1
+        if "return_dict_in_generate" not in gen_kwargs:
+            gen_kwargs["return_dict_in_generate"] = False
+        if "output_scores" not in gen_kwargs:
+            gen_kwargs["output_scores"] = False
+        if "output_logits" not in gen_kwargs:
+            gen_kwargs["output_logits"] = False
+        if "until" in gen_kwargs:
+            gen_kwargs.pop("until")
+
+        input_ids_list = [tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt") for prompt in question_input]
+        pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+        input_ids = self.pad_sequence(input_ids_list, batch_first=True, padding_value=pad_token_ids).to(self.device)
+        attention_masks = input_ids.ne(pad_token_ids).to(self.device)
+
+        if task_type == "image":
+            gen_kwargs["image_sizes"] = [image_tensor[0][idx].size for idx in range(len(image_tensor[0]))]
+        # elif task_type == "multi-image":
+            # gen_kwargs["image_sizes"] = [[image_tensor[0].shape[-2], image_tensor[0].shape[-1]] for _ in range(image_tensor[0].shape[0])]
+        elif task_type == "video":
+            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+            keywords = [stop_str]
+            stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
+            gen_kwargs["modalities"] = ["video"]
+            # gen_kwargs["stopping_criteria"] = [stopping_criteria]
+            self._config.mm_spatial_pool_stride = self.mm_spatial_pool_stride
+            self._config.mm_spatial_pool_mode = self.mm_spatial_pool_mode
+
+        # These steps are not in LLaVA's original code, but are necessary for generation to work
+        # TODO: attention to this major generation step...
+        if "image_aspect_ratio" in gen_kwargs.keys():
+            gen_kwargs.pop("image_aspect_ratio")
+        try:
+            with torch.inference_mode():
+                cont = self.model.generate(input_ids, attention_mask=attention_masks, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
+                # cont = self.model.generate(qwen_input_ids, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
+        except Exception as e:
+            raise e
+        
+
+        if gen_kwargs["return_dict_in_generate"]:
+            scores = cont.scores
+            scores = torch.stack(scores).reshape(len(scores), -1).transpose(0, 1)
+
+            scores = scores.reshape(-1, scores.shape[0], scores.shape[-1])
+            scores = torch.nn.functional.log_softmax(scores, dim=1)
+            scores = scores.reshape(-1, scores.shape[-1]).cpu().numpy()
+            probs = np.exp(scores)
+
+            print("Response without skipping special tokens:", self.tokenizer.batch_decode(cont.sequences, skip_special_tokens=False)[0].strip())
+            print("Number of tokens:", cont.sequences.shape[-1])
+            tokens_dict = {}
+            for i in range(cont.sequences.shape[-1]):
+                out_token = self.tokenizer.decode(cont.sequences[0, i].item())
+                tokens_dict[i] = {'token': out_token}
+                print(f"Token [{i}]: {out_token}")
+            for i in range(cont.sequences.shape[-1]):
+                print(f"Top 5 tokens for token at pos {i}")
+                print("| token | token string | log probability | probability |")
+                top5_token_list, top5_prob_list = [], []
+                for tok_id in np.argsort(scores[:, i]).tolist()[::-1][:5]:
+                    tok = self.tokenizer.decode(tok_id)
+                    score = scores[tok_id, i]
+                    prob = np.exp(score)
+                    top5_token_list.append(tok)
+                    top5_prob_list.append(prob)
+                    print(f"| {tok_id:5d} | {tok:8s} | {score:.3f} | {prob:.2%}")
+                tokens_dict[i]['top5_tokens'] = top5_token_list
+                tokens_dict[i]['top5_probs'] = top5_prob_list
+                tokens_dict[i]['avg_prob'] = np.mean(probs[:, i])
+                tokens_dict[i]['std_prob'] = np.std(probs[:, i])
+
+            response = self.tokenizer.batch_decode(cont.sequences, skip_special_tokens=True)[0].strip()
+            output_dict = {
+                "response": response,
+                "num_tokens": cont.sequences.shape[-1],
+                "tokens": tokens_dict
+            }
+            cont = cont.sequences
+            return output_dict
+        else:
+            text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
+            text_outputs = [response.strip() for response in text_outputs]
+            return text_outputs
+            
+
+
     def generate_until_multi_round(self, requests: List[Instance]) -> List[str]:
         res = []
 
