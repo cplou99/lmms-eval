@@ -116,7 +116,7 @@ class Socratic(lmms):
 
         if self.save_captions or self.load_captions:
             os.makedirs(self.captions_dir, exist_ok=True)
-            self.captions_filename = os.path.join(self.captions_dir, f'{vlm_caption_name}_window{window_span}s.json')
+            self.captions_filename = os.path.join(self.captions_dir, f'{vlm_caption_name}_window{window_span}s_toks{self.vlm_caption_max_new_tokens}.json')
             if os.path.isfile(self.captions_filename):
                 with open(self.captions_filename, "r") as f:
                     self.captions = json.load(f)

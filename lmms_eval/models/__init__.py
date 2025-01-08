@@ -60,6 +60,7 @@ AVAILABLE_MODELS = {
     "sequential_end_model": "SequentialEnd",
     "sampling_iterative_model": "IterativeSampling",
     "socratic_model": "Socratic",
+    "apollo": "Apollo",
 }
 
 

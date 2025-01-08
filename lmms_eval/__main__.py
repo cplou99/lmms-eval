@@ -118,12 +118,12 @@ def parse_eval_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default="cuda:0",
         help="Device to use (e.g. cuda, cuda:0, cpu)",
     )
     parser.add_argument(
         "--output_path",
-        default="/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/",
+        default="/disk/VAST/VASTbench_lmmseval/logs/",
         type=str,
         metavar="= [dir/file.jsonl] [DIR]",
         help="The path to the output file where the result metrics will be saved. If the path is a directory and log_samples is true, the results will be saved in the directory. Else the parent directory will be used.",

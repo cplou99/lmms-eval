@@ -202,6 +202,16 @@ class GPT4V(lmms):
         
         return response_dict
 
+    def inference_format(self, resp_format, messages):
+        from openai import OpenAI
+        client = OpenAI()
+        completion = client.beta.chat.completions.parse(
+            model=self.model_version,
+            messages=messages,
+            response_format=resp_format,
+        )
+
+        return completion
 
     def generate_until(self, requests) -> List[str]:
         res = []

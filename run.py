@@ -1,6 +1,6 @@
 import subprocess
 
-def run_model_evaluation(models_dict, selected_models, num_processes=8, task="VASTbench_vqa", batch_size=1):
+def run_model_evaluation(models_dict, selected_models, num_processes=8, num_machines=1, gpu_ids=0, task="VASTbench_vqa", batch_size=1):
     """
     Runs the specified evaluation command for selected models.
 
@@ -25,12 +25,23 @@ def run_model_evaluation(models_dict, selected_models, num_processes=8, task="VA
         if "output_path" in model_config.keys():
             output_path = model_config["output_path"] 
         else:
-            output_path = "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/"
+            output_path = "/disk/VAST/VASTbench_lmmseval/logs/"
 
+        num_params = int(1e7)
         # Construct the command
         command = [
             "python3", "-m", "accelerate.commands.launch",
-            f"--num_processes={num_processes}",
+            # "multi-gpu",
+            # "--mixed_precision=fp16", 
+            # "--use_fsdp",
+            # "--fsdp_auto_wrap_policy=size_based_wrap", 
+            # f"--fsdp_min_num_params={num_params}",
+            f"--num_processes={num_processes}", 
+            f"--num_machines={num_machines}",
+            f"--gpu_ids={gpu_ids}",
+            "--machine_rank=0",
+            "--main_process_ip=127.0.0.1",
+            "--main_process_port=29500",
             "-m", "lmms_eval",
             f"--model={model_name}",
             f"--model_args={model_args}",
@@ -59,7 +70,7 @@ models_dict = {
         "model_name": "llava_onevision",
         "model_args": "pretrained=lmms-lab/llava-onevision-qwen2-7b-ov",
         "log_suffix": "llava_onevision.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs"
     },
     "llava": {
         "model_name": "llava",
@@ -79,7 +90,7 @@ models_dict = {
     },
     "llama": {
         "model_name": "llama_vision",
-        "model_args": "pretrained=meta-llama/Llama-3.2-11B-Vision-Instruct,max_frames_num=2",
+        "model_args": "pretrained=meta-llama/Llama-3.2-11B-Vision-Instruct,max_frames_num=32",
         "log_suffix": "llama.VAST"
         # Max frames num is set to 1 to fit into 24Gb GPU memory by default was 32 
     },
@@ -141,6 +152,11 @@ models_dict = {
         "model_args": "model_version=gpt-4o-2024-08-06,modality=video",
         "log_suffix": "gpt4.VAST"
     },
+    "apollo": {
+        "model_name": "apollo",
+        "model_args": "pretrained=GoodiesHere/Apollo-LMMs-Apollo-7B-t32",
+        "log_suffix": "apollo.VAST"
+    },
     "gpt4_blind": {
         "model_name": "gpt4v",
         "model_args": "model_version=gpt-4o-2024-08-06,modality=blind",
@@ -151,79 +167,84 @@ models_dict = {
         "model_args": "model_version=gpt-4o-mini-2024-07-18,modality=blind",
         "log_suffix": "gpt4.VAST"
     },
+    "llava_nextvideo_blind": {
+        "model_name": "llava_vid",
+        "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=32,mm_spatial_pool_mode=average,video_decode_backend=blind",
+        "log_suffix": "llava_nextvideo.VAST"
+        # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
+    },
     "vast_model": {
         # Put the config of the model betwen brackets {}, change = by # and , by ;
         "model_name": "vast_model",
-        "model_args": "vlm_pred_name=llava_onevision,vlm_pred_config={pretrained#lmms-lab/llava-onevision-qwen2-7b-ov}",
-        # "model_args": "vlm_pred_name=llava_vid,vlm_pred_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average}",
-        # "model_args": "vlm_pred_name=llama_vision,vlm_pred_config={pretrained#meta-llama/Llama-3.2-11B-Vision-Instruct;max_frames_num#2}",
-        "log_suffix": "VAST_model.VAST"
+        "model_args": "vlm_name=llava_vid,vlm_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average},llm_reasoning_name=gpt4v,llm_reasoning_config={model_version#gpt-4o-mini-2024-07-18;modality#blind}", 
+        "log_suffix": "socratic_model.VAST",
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/vast"   
     },
     "sequential_llava_vid": {
         "model_name": "sequential_model",
         "model_args": "vlm_pred_name=llava_vid,vlm_pred_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/sequential"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/sequential"
     },
     "sequential_llava_ov": {
         "model_name": "sequential_model",
         "model_args": "vlm_pred_name=llava_onevision,vlm_pred_config={pretrained#lmms-lab/llava-onevision-qwen2-7b-ov}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/sequential"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/sequential"
     },
     "sequential_llama": {
         "model_name": "sequential_model",
         "model_args": "vlm_pred_name=llama_vision,vlm_pred_config={pretrained#meta-llama/Llama-3.2-11B-Vision-Instruct;max_frames_num#2}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/sequential"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/sequential"
     },
     "sequential_end_llava_vid": {
         "model_name": "sequential_end_model",
         "model_args": "vlm_pred_name=llava_vid,vlm_pred_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/sequential_end"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/sequential_end"
     },
     "sequential_end_llava_ov": {
         "model_name": "sequential_end_model",
         "model_args": "vlm_pred_name=llava_onevision,vlm_pred_config={pretrained#lmms-lab/llava-onevision-qwen2-7b-ov}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/sequential_end"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/sequential_end"
     },
     "sequential_end_llama": {
         "model_name": "sequential_end_model",
         "model_args": "vlm_pred_name=llama_vision,vlm_pred_config={pretrained#meta-llama/Llama-3.2-11B-Vision-Instruct;max_frames_num#2}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/sequential_end"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/sequential_end"
     },
     "it_sampling_llava_vid": {
         "model_name": "sampling_iterative_model",
         "model_args": "vlm_pred_name=llava_vid,vlm_pred_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/iterative_sampling"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/iterative_sampling"
     },
     "it_sampling_llava_ov": {
         "model_name": "sampling_iterative_model",
         "model_args": "vlm_pred_name=llava_onevision,vlm_pred_config={pretrained#lmms-lab/llava-onevision-qwen2-7b-ov}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/iterative_sampling"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/iterative_sampling"
     },
     "it_sampling_llama": {
         "model_name": "sampling_iterative_model",
         "model_args": "vlm_pred_name=llama_vision,vlm_pred_config={pretrained#meta-llama/Llama-3.2-11B-Vision-Instruct;max_frames_num#2}",
         "log_suffix": "sequential_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/iterative_sampling"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/iterative_sampling"
     },
     "socratic_llava_vid_gpt4o": {
         "model_name": "socratic_model",
         "model_args": "vlm_caption_name=llava_vid,vlm_caption_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average},llm_vqa_name=gpt4v,llm_vqa_config={model_version#gpt-4o-2024-08-06;modality#blind}",
         "log_suffix": "socratic_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/socratic"
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/socratic"
     },
     "socratic_llava_vid_gpt4omini": {
         "model_name": "socratic_model",
         "model_args": "vlm_caption_name=llava_vid,vlm_caption_config={pretrained#lmms-lab/LLaVA-Video-7B-Qwen2;conv_template#qwen_1_5;max_frames_num#32;mm_spatial_pool_mode#average},llm_vqa_name=gpt4v,llm_vqa_config={model_version#gpt-4o-mini-2024-07-18;modality#blind}", 
         "log_suffix": "socratic_model.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/socratic"   
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs/socratic"   
     }
 }
 
@@ -231,19 +252,20 @@ models_dict = {
 all_models = ["llava_nextvideo", "videochat2_mistralHD", "videollava", "llava", "llavanext-mistral", "moviechat"]
 
 all_tasks = ["VASTbench_vqa", "VASTbench_fullvideo", "VASTbench_gtinterval", "VASTbench_gt1mininterval", "VASTbench_gtimage", "VASTbench_gtimage_gpteval", "VASTbench_gt1mininterval_gpteval"]
-tasks = ["VASTbench_fullvideo"]
+tasks = ["VASTbench_fullvideo", "VASTbench_fullvideo_gpteval"]
 
-# tasks = ["VASTbench_gt1mininterval"]
+tasks = ["VASTbench_fullvideo"]
 # tasks = ["VASTbench_gtinterval"]
+
 tasks_to_models = {
     "VASTbench_vqa": ["llava_nextvideo"],
-    "VASTbench_fullvideo": ["sequential_end_llava_vid",  "it_sampling_llava_vid", "socratic_llava_vid_gpt4omini"],  #"sequential_llava_vid", "sequential_llava_ov", "sequential_llama", "sequential_end_llava_vid", "sequential_end_llava_ov", "sequential_end_llama", "socratic_llava_vid_gpt4omini", "socratic_llava_vid_gpt4o", "it_sampling_llava_vid", "it_sampling_llava_ov", "it_sampling_llama"],
+    "VASTbench_fullvideo": ["vast_model"],  #"sequential_llava_vid", "sequential_llava_ov", "sequential_llama", "sequential_end_llava_vid", "sequential_end_llava_ov", "sequential_end_llama", "socratic_llava_vid_gpt4omini", "socratic_llava_vid_gpt4o", "it_sampling_llava_vid", "it_sampling_llava_ov", "it_sampling_llama"],
     "VASTbench_gtinterval": ["llava_nextvideo"],
-    "VASTbench_gt1mininterval": ["llava_onevision"],
+    "VASTbench_gt1mininterval": ["apollo"],
     "VASTbench_gtimage": ["llava_onevision"],
     "VASTbench_gtimage_gpteval": ["gpt4o_image", "gpt4o_mini_image"],
-    "VASTbench_gt1mininterval_gpteval": ["llama"],
-    "VASTbench_fullvideo_gpteval": ["sequential_llava_vid", "sequential_llava_ov", "sequential_llama", "sequential_end_llava_vid", "sequential_end_llava_ov", "sequential_end_llama", "socratic_llava_vid_gpt4omini", "socratic_llava_vid_gpt4o", "it_sampling_llava_vid", "it_sampling_llava_ov", "it_sampling_llama"],
+    "VASTbench_gt1mininterval_gpteval": ["apollo"],
+    "VASTbench_fullvideo_gpteval": ["sequential_llava_vid"],
     "VASTbench_gtinterval_loglikelihood": ["llama"],
     "VASTbench_gtinterval_loglikelihood_gpteval": ["llava_nextvideo"]
 }
@@ -251,4 +273,4 @@ tasks_to_models = {
 # Run the evaluations
 for task in tasks:
     selected_models = tasks_to_models[task]
-    run_model_evaluation(models_dict, selected_models, task=task)
+    run_model_evaluation(models_dict, selected_models, task=task, num_processes=1, num_machines=1, gpu_ids="0")

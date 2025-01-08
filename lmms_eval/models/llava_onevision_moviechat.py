@@ -41,7 +41,7 @@ try:
     import sys
     import importlib
     import llava
-    sys.path.insert(0, "/home/cplou/PycharmProjects/VLM/lmms-eval/lmms_eval/models/MovieChat/MovieChat_Onevision/")
+    sys.path.insert(0, "/disk/VAST/lmms-eval/lmms_eval/models/MovieChat/MovieChat_Onevision/")
     importlib.reload(llava)
     from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.constants import (
         DEFAULT_IM_END_TOKEN,
@@ -383,15 +383,22 @@ class Llava_OneVision_MovieChat(lmms):
                         # try:
                         os.makedirs(self.tmp_folder, exist_ok=True)
 
-                        video = VideoFileClip(visual[0])
-                        clip_duration = video.duration / self.num_clips
+                        # video = VideoFileClip(visual[0])
+                        video = VideoReader(visual[0], ctx=cpu(0))
+                        frame_count = len(video)
+                        frame_rate = video.get_avg_fps()
+                        video_duration = frame_count / frame_rate
+                        clip_duration = video_duration / self.num_clips
 
                         cur_frame = 0
                         for i in range(self.num_clips):
                             start_time = i * clip_duration
                             end_time = start_time + clip_duration
                             # uniformly sample self.sliding_window_length frames from the video from start_time to end_time
-                            frames = list(video.subclip(start_time, end_time).iter_frames(fps=self.sliding_window_length / clip_duration))[: self.sliding_window_length]
+                            # frames = list(video.subclip(start_time, end_time).iter_frames(fps=self.sliding_window_length / clip_duration))[: self.sliding_window_length]
+                            frame_indices = np.linspace(start_time * frame_rate, end_time * frame_rate, self.sliding_window_length, endpoint=False, dtype=int)
+                            frames = video.get_batch(frame_indices).asnumpy()
+                            
                             frames = [Image.fromarray(frame).convert("RGB") for frame in frames]
                             preprocess_frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
                             with torch.no_grad():
@@ -621,16 +628,24 @@ class Llava_OneVision_MovieChat(lmms):
                             # try:
                             os.makedirs(self.tmp_folder, exist_ok=True)
 
-                            video = VideoFileClip(visual[0])
-                            clip_duration = video.duration / self.num_clips
+                            video = VideoReader(visual[0], ctx=cpu(0))
+                            frame_count = len(video)
+                            frame_rate = video.get_avg_fps()
+                            video_duration = frame_count / frame_rate
+                            clip_duration = video_duration / self.num_clips
 
                             cur_frame = 0
                             for i in range(self.num_clips):
                                 start_time = i * clip_duration
                                 end_time = start_time + clip_duration
                                 # uniformly sample self.sliding_window_length frames from the video from start_time to end_time
-                                frames = list(video.subclip(start_time, end_time).iter_frames(fps=self.sliding_window_length / clip_duration))[: self.sliding_window_length]
+                                # frames = list(video.subclip(start_time, end_time).iter_frames(fps=self.sliding_window_length / clip_duration))[: self.sliding_window_length]
+
+                                frame_indices = np.linspace(start_time * frame_rate, end_time * frame_rate, self.sliding_window_length, endpoint=False, dtype=int)
+                                frames = vr.get_batch(frame_indices).numpy()
+
                                 frames = [Image.fromarray(frame).convert("RGB") for frame in frames]
+
                                 preprocess_frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
                                 encoded_window = self.model.encode_images(preprocess_frames)  # [frames, 729,3584]
 
