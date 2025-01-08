@@ -7,3 +7,6 @@
 [submodule "lmms_eval/models/MovieChat"]
 	path = lmms_eval/models/MovieChat
 	url = https://github.com/cplou99/MovieChat
+[submodule "lmms_eval/models/VILA"]
+	path = lmms_eval/models/VILA
+	url = git@github.com:NVlabs/VILA.git
