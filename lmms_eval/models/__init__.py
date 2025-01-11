@@ -36,7 +36,7 @@ AVAILABLE_MODELS = {
     "minicpm_v": "MiniCPM_V",
     "minimonkey": "MiniMonkey",
     "moviechat": "MovieChat",
-    "mplug_owl_video": "mplug_Owl",
+    "mplug_owl_video_model": "mplug_Owl",
     "phi3v": "Phi3v",
     "qwen_vl": "Qwen_VL",
     "qwen2_vl": "Qwen2_VL",
@@ -61,6 +61,7 @@ AVAILABLE_MODELS = {
     "sampling_iterative_model": "IterativeSampling",
     "socratic_model": "Socratic",
     "apollo": "Apollo",
+    "longvu_model": "LongVU",
 }
 
 

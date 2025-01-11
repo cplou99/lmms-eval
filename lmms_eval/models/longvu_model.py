@@ -2,36 +2,46 @@ from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
 import torch
+import sys
 from accelerate import Accelerator, DistributedType, InitProcessGroupKwargs
 from accelerate.state import AcceleratorState
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-
+from PIL import Image
+import numpy as np
+from decord import VideoReader, cpu    # pip install decord
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
-from lmms_eval.models.mplug_owl_video.modeling_mplug_owl import (
-    MplugOwlForConditionalGeneration,
-)
-from lmms_eval.models.mplug_owl_video.processing_mplug_owl import (
-    MplugOwlImageProcessor,
-    MplugOwlProcessor,
-)
 
+sys.path.append("../lmms-eval/lmms_eval/models/LongVU")
+from lmms_eval.models.LongVU.longvu.builder import load_pretrained_model
+from lmms_eval.models.LongVU.longvu.constants import (
+    DEFAULT_IMAGE_TOKEN,
+    IMAGE_TOKEN_INDEX,
+)
+from lmms_eval.models.LongVU.longvu.conversation import conv_templates, SeparatorStyle
+from lmms_eval.models.LongVU.longvu.mm_datautils import (
+    KeywordsStoppingCriteria,
+    process_images,
+    tokenizer_image_token,
+)
 eval_logger = logger
 
 
-@register_model("mplug_owl_video")
-class mplug_Owl(lmms):
+@register_model("longvu_model")
+class LongVU(lmms):
     def __init__(
         self,
-        pretrained: str = "MAGAer13/mplug-owl-llama-7b-video",
+        pretrained: str = "./lmms_eval/models/LongVU/checkpoints/LongVU_Qwen2_7B/",
         device: Optional[str] = "cuda:0",
+        device_map: Optional[str] = "auto",
+        attn_implementation=(
+            "sdpa" if torch.__version__ >= "2.1.2" else "eager"
+        ),
         dtype: Optional[Union[str, torch.dtype]] = "auto",
         batch_size: Optional[Union[int, str]] = 1,
-        device_map="cuda:0",
-        num_frames: Union[str, int] = 4,
         **kwargs,
     ) -> None:
         """
@@ -63,16 +73,16 @@ class mplug_Owl(lmms):
         # for transformers == 4.39.1, object type not serializable
         # Protobuf needs to be in 3.20.x otherwise error
         # ヽ(｀Д´)ﾉ
-        self._model = MplugOwlForConditionalGeneration.from_pretrained(
+
+        self._tokenizer, self._model, self.image_processor, self.context_len = load_pretrained_model(
             pretrained,
-            torch_dtype=torch.bfloat16,
+            None,
+            "cambrian_qwen"
         )
-        self.image_processor = MplugOwlImageProcessor.from_pretrained(pretrained)
-        self._tokenizer = AutoTokenizer.from_pretrained(pretrained)
-        self.processor = MplugOwlProcessor(self.image_processor, self.tokenizer)
+
+        # self.processor = MplugOwlProcessor(self.image_processor, self.tokenizer)
         self.model.eval()
         self.batch_size_per_gpu = batch_size
-        self.num_frames = num_frames
 
         self.model.to(self.device)
 
@@ -152,9 +162,33 @@ class mplug_Owl(lmms):
                 new_list.append(j)
         return new_list
 
-    def format_prompt(self, question):
-        prompts = [f" <|video|> Question : {question} Answer : "]
-        return prompts
+    def format_prompt(self, question, data_type):
+        if data_type == "image":
+            token = "<|image|>"
+        elif data_type == "video":
+            token = "<|video|>"
+        else:
+            raise ValueError("Invalid data type")
+        
+        messages = [
+            {"role": "user", "content": f"""{token} {question}."""},
+            {"role": "assistant", "content": ""}
+        ]
+        return messages
+
+    def load_video(self, video_path):
+        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        fps = float(vr.get_avg_fps())
+        total_frame_num = len(vr)
+        video_time = total_frame_num / vr.get_avg_fps()
+        frame_idx = [i for i in range(0, len(vr), round(fps),)]
+        frame_time = [i / fps for i in frame_idx]
+        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
+        spare_frames = vr.get_batch(frame_idx).asnumpy()
+        # import pdb;pdb.set_trace()
+
+        return spare_frames, frame_time, video_time
+    
 
     def generate_until(self, requests) -> List[str]:
         res = []
@@ -164,29 +198,53 @@ class mplug_Owl(lmms):
             # encode, pad, and truncate contexts for this batch
             visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
             visuals = self.flatten(visuals)
-            inputs = self.processor(text=self.format_prompt(contexts), videos=visuals, num_frames=self.num_frames, return_tensors="pt")
-            pixel_values_videos = inputs["video_pixel_values"]
-            if pixel_values_videos.shape[2] != self.num_frames:
-                empty_frames = torch.zeros((1, pixel_values_videos.shape[1], self.num_frames - pixel_values_videos.shape[2], *pixel_values_videos.shape[3:]), dtype=pixel_values_videos.dtype)
-                pixel_values_videos = torch.cat([pixel_values_videos, empty_frames], dim=2)
-                inputs["video_pixel_values"] = pixel_values_videos
-            inputs = {k: v.bfloat16() if v.dtype == torch.float else v for k, v in inputs.items()}
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
-            if "max_new_tokens" in gen_kwargs:
-                gen_kwargs["max_length"] = gen_kwargs["max_new_tokens"]
+            if type(visuals[0]) == str:
+                video, frame_time, video_time = self.load_video(visuals[0])
+                
+            else:
+                raise ValueError("Invalid type for visuals")
+            
+            image_sizes = [video[0].shape[:2]]
+            video = process_images(video, self.image_processor, self.model.config)
+            video = [item.unsqueeze(0) for item in video]
+
+            qs = DEFAULT_IMAGE_TOKEN + "\n" + contexts
+            conv = conv_templates["qwen"].copy()
+            conv.append_message(conv.roles[0], qs)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+
+            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(self.device)
+            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+            keywords = [stop_str]
+            stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
+
+
             if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_length"] = 128
+                gen_kwargs["max_new_tokens"] = 128
             if "do_sample" not in gen_kwargs:
                 gen_kwargs["do_sample"] = False
             if "top_k" not in gen_kwargs:
                 gen_kwargs["top_k"] = 1
+            if "temperature" not in gen_kwargs:
+                gen_kwargs["temperature"] = 0.2
 
-            generate_kwargs = {"do_sample": gen_kwargs["do_sample"], "top_k": gen_kwargs["top_k"], "max_length": gen_kwargs["max_length"]}
+            gen_kwargs.pop("until")
+
 
             with torch.no_grad():
-                outputs = self.model.generate(**inputs, **generate_kwargs)
-            sentence = self.tokenizer.decode(outputs.tolist()[0], skip_special_tokens=True)
+                output_ids = self.model.generate(
+                    input_ids,
+                    images=video,
+                    image_sizes=image_sizes,
+                    use_cache=True,
+                    stopping_criteria=[stopping_criteria],
+                    **gen_kwargs
+                )
+            sentence = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+            torch.cuda.empty_cache()  # Call after processing a batch or large tensor
+            print("Generated sentence:", sentence)
             pbar.update(1)
             res.append(sentence)
         pbar.close()
