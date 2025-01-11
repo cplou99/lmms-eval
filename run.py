@@ -72,6 +72,13 @@ models_dict = {
         "log_suffix": "llava_onevision.VAST",
         "output_path": "/disk/VAST/VASTbench_lmmseval/logs"
     },
+    "llava_onevision_tiles": {
+        # Only implemented for gt_image task
+        "model_name": "llava_onevision",
+        "model_args": "pretrained=lmms-lab/llava-onevision-qwen2-7b-ov,tiles=True",
+        "log_suffix": "llava_onevision.VAST",
+        "output_path": "/disk/VAST/VASTbench_lmmseval/logs"
+    },
     "llava": {
         "model_name": "llava",
         "model_args": "pretrained=liuhaotian/llava-v1.5-7b",
@@ -85,6 +92,12 @@ models_dict = {
     "llava_nextvideo": {
         "model_name": "llava_vid",
         "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=32,mm_spatial_pool_mode=average",
+        "log_suffix": "llava_nextvideo.VAST"
+        # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
+    },
+    "llava_nextvideo_tiles": {
+        "model_name": "llava_vid",
+        "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=8,mm_spatial_pool_mode=average,tiles=True",
         "log_suffix": "llava_nextvideo.VAST"
         # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
     },
@@ -254,17 +267,18 @@ all_models = ["llava_nextvideo", "videochat2_mistralHD", "videollava", "llava", 
 all_tasks = ["VASTbench_vqa", "VASTbench_fullvideo", "VASTbench_gtinterval", "VASTbench_gt1mininterval", "VASTbench_gtimage", "VASTbench_gtimage_gpteval", "VASTbench_gt1mininterval_gpteval"]
 tasks = ["VASTbench_fullvideo", "VASTbench_fullvideo_gpteval"]
 
-tasks = ["VASTbench_fullvideo"]
+tasks = ["VASTbench_gt1mininterval_gpteval"]
 # tasks = ["VASTbench_gtinterval"]
 
 tasks_to_models = {
     "VASTbench_vqa": ["llava_nextvideo"],
     "VASTbench_fullvideo": ["vast_model"],  #"sequential_llava_vid", "sequential_llava_ov", "sequential_llama", "sequential_end_llava_vid", "sequential_end_llava_ov", "sequential_end_llama", "socratic_llava_vid_gpt4omini", "socratic_llava_vid_gpt4o", "it_sampling_llava_vid", "it_sampling_llava_ov", "it_sampling_llama"],
     "VASTbench_gtinterval": ["llava_nextvideo"],
-    "VASTbench_gt1mininterval": ["apollo"],
+    "VASTbench_gt1mininterval": ["llava_nextvideo"],
     "VASTbench_gtimage": ["llava_onevision"],
-    "VASTbench_gtimage_gpteval": ["gpt4o_image", "gpt4o_mini_image"],
-    "VASTbench_gt1mininterval_gpteval": ["apollo"],
+    "VASTbench_gtimage_gpteval": ["llava_onevision_tiles"],
+    "VASTbench_gt1mininterval_gpteval": ["moviechat"],
+    "VASTbench_gtinterval_gpteval": ["llava_nextvideo_tiles"],
     "VASTbench_fullvideo_gpteval": ["sequential_llava_vid"],
     "VASTbench_gtinterval_loglikelihood": ["llama"],
     "VASTbench_gtinterval_loglikelihood_gpteval": ["llava_nextvideo"]
@@ -273,4 +287,4 @@ tasks_to_models = {
 # Run the evaluations
 for task in tasks:
     selected_models = tasks_to_models[task]
-    run_model_evaluation(models_dict, selected_models, task=task, num_processes=1, num_machines=1, gpu_ids="0")
+    run_model_evaluation(models_dict, selected_models, task=task, num_processes=1, num_machines=1, gpu_ids="1")

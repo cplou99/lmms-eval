@@ -92,6 +92,7 @@ class LlavaVid(lmms):
         truncate_context=False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         max_frames_num: int = 3,
         video_fps: int = 1,
+        tiles: bool = False,
         mm_resampler_type: str = "spatial_pool",
         mm_spatial_pool_stride: int = 2,
         mm_spatial_pool_out_channels: int = 1024,
@@ -133,6 +134,7 @@ class LlavaVid(lmms):
         self.mm_spatial_pool_out_channels = int(mm_spatial_pool_out_channels)
         self.mm_spatial_pool_mode = mm_spatial_pool_mode
         self.max_frames_num = int(max_frames_num)
+        self.tiles = tiles
         self.fps = int(video_fps)
         self.mm_resampler_location = mm_resampler_location
         self.delay_load = delay_load
@@ -308,7 +310,31 @@ class LlavaVid(lmms):
                 print(f"Failed to read frame at path: {frame_path}")
         return video
 
-    def load_video(self, video_path, max_frames_num, fps, force_sample=False):
+    def split_frame_into_tiles(self, frame):
+        """
+        Splits a frame into four equal tiles (top-left, top-right, bottom-left, bottom-right).
+        """
+        height, width, _ = frame.shape
+        mid_h, mid_w = height // 2, width // 2
+
+        # Define the four tiles
+        top_left = frame[0:mid_h, 0:mid_w]
+        top_right = frame[0:mid_h, mid_w:width]
+        bottom_left = frame[mid_h:height, 0:mid_w]
+        bottom_right = frame[mid_h:height, mid_w:width]
+
+        return [top_left, top_right, bottom_left, bottom_right]
+
+    def resize_frame(self, frame, size=(384, 384)):
+        """
+        Resizes a frame to the given size using PIL.Image.
+        """
+        image = Image.fromarray(frame)  # Convert NumPy array to PIL Image
+        resized_image = image.resize(size, Image.BICUBIC)  # Resize to target size
+        return np.array(resized_image)  # Convert back to NumPy array
+
+
+    def load_video(self, video_path, max_frames_num, fps, force_sample=False, tiles=False):
         if max_frames_num == 0:
             return np.zeros((1, 336, 336, 3))
         vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
@@ -325,6 +351,22 @@ class LlavaVid(lmms):
         frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
         spare_frames = vr.get_batch(frame_idx).asnumpy()
         # import pdb;pdb.set_trace()
+
+        if tiles:
+            # For each frame, split into tiles and include the resized original frame and tiles
+            all_frames_with_tiles = []
+            for frame in spare_frames:
+                # Resize the original frame
+                resized_frame = self.resize_frame(frame)
+                # Split into tiles
+                tiles = self.split_frame_into_tiles(resized_frame)
+                # Resize each tile
+                resized_tiles = [self.resize_frame(tile) for tile in tiles]
+                # Append the resized original frame and its resized tiles
+                all_frames_with_tiles.append(resized_frame)
+                all_frames_with_tiles.extend(resized_tiles)
+
+            spare_frames = np.array(all_frames_with_tiles)  # Convert to a NumPy array
 
         return spare_frames, frame_time, video_time
 
@@ -345,7 +387,7 @@ class LlavaVid(lmms):
             visuals = self.flatten(visuals)
             videos = []
             for visual in visuals:
-                video, frame_time, video_time = self.load_video(visual, self.max_frames_num, self.fps, force_sample=self.force_sample)
+                video, frame_time, video_time = self.load_video(visual, self.max_frames_num, self.fps, force_sample=self.force_sample, tiles=self.tiles)
                 video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
                 if self.torch_dtype == "bfloat16":
                     video = video.bfloat16()
@@ -421,7 +463,7 @@ class LlavaVid(lmms):
                 # for visual in visuals:
                 if len(visuals) == 1:
                     if self.video_decode_backend == "decord":
-                        video, frame_time, video_time = self.load_video(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
+                        video, frame_time, video_time = self.load_video(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample, tiles=self.tiles)
                     elif self.video_decode_backend == "pyav":
                         video, frame_time, video_time = read_video_pyav(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
                     elif self.video_decode_backend == "image":
@@ -464,7 +506,9 @@ class LlavaVid(lmms):
             qs = contexts
             # import pdb;pdb.set_trace()
             if self.add_time_instruction:
-                time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video)} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
+                if self.tiles: sent_tiles = "with 4 tiles per frame"
+                else: sent_tiles = ""
+                time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video)} frames are uniformly sampled from it. These frames are located at {frame_time} {sent_tiles}.Please answer the following questions related to this video."
                 qs = f"{time_instruciton}\n{qs}"
             if self.model.config.mm_use_im_start_end:
                 qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs

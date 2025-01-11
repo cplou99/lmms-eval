@@ -81,6 +81,7 @@ class Llava_OneVision(lmms):
         truncate_context: Optional[bool] = False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         customized_config: Optional[str] = None,  # ends in json
         max_frames_num: Optional[int] = 32,
+        tiles: Optional[bool] = False,
         mm_spatial_pool_stride: Optional[int] = 2,
         mm_spatial_pool_mode: Optional[str] = "bilinear",
         token_strategy: Optional[str] = "single",  # could be "single" or "multiple", "multiple" denotes adding multiple <image> tokens for each frame
@@ -120,6 +121,7 @@ class Llava_OneVision(lmms):
         self.mm_spatial_pool_stride = mm_spatial_pool_stride
         self.mm_spatial_pool_mode = mm_spatial_pool_mode
         self.video_decode_backend = video_decode_backend
+        self.tiles = tiles
 
         overwrite_config = {}
         overwrite_config["mm_spatial_pool_stride"] = self.mm_spatial_pool_stride
@@ -367,6 +369,25 @@ class Llava_OneVision(lmms):
                 new_list.append(j)
         return new_list
 
+    def split_frame_into_tiles(self, frame):
+        """
+        Splits a frame into four equal tiles (top-left, top-right, bottom-left, bottom-right).
+        """
+        
+        frame = np.array(frame)
+        frame = frame[0, :]
+        height, width, _ = frame.shape
+        mid_h, mid_w = height // 2, width // 2
+
+        # Define the four tiles
+        top_left = frame[0:mid_h, 0:mid_w]
+        top_right = frame[0:mid_h, mid_w:width]
+        bottom_left = frame[mid_h:height, 0:mid_w]
+        bottom_right = frame[mid_h:height, mid_w:width]
+
+        visuals = [PIL.Image.fromarray(frame), PIL.Image.fromarray(top_left), PIL.Image.fromarray(top_right), PIL.Image.fromarray(bottom_left), PIL.Image.fromarray(bottom_right)]
+        return visuals
+
     def load_video(self, video_path, max_frames_num):
         if type(video_path) == str:
             vr = VideoReader(video_path, ctx=cpu(0))
@@ -448,11 +469,14 @@ class Llava_OneVision(lmms):
                         placeholder_count = 1
 
                     elif type(visual[0]) == PIL.Image.Image:  # For image, multi-image tasks
+                        if self.tiles:
+                            visual = self.split_frame_into_tiles(visual)
                         image_tensor = process_images(visual, self._image_processor, self._config)
                         if type(image_tensor) is list:
                             image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
                         else:
                             image_tensor = image_tensor.to(dtype=torch.float16, device=self.device)
+
 
                         task_type = "image"
                         placeholder_count = len(visual) if isinstance(visual, list) else 1
