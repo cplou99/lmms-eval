@@ -522,7 +522,7 @@ all_models = ["llava_nextvideo", "videochat2_mistralHD", "videollava", "llava", 
 all_tasks = ["VASTbench_vqa", "VASTbench_fullvideo", "VASTbench_gtinterval", "VASTbench_gt1mininterval", "VASTbench_gtimage", "VASTbench_gtimage_gpteval", "VASTbench_gt1mininterval_gpteval"]
 tasks = ["VASTbench_fullvideo", "VASTbench_fullvideo_gpteval"]
 
-tasks = ["VASTbench_gt1mininterval_gpteval"]
+tasks = ["VASTbench_fullvideo_gpteval"]
 # tasks = ["VASTbench_gtinterval"]
 
 tasks_to_models = {
@@ -534,7 +534,7 @@ tasks_to_models = {
     "VASTbench_gtimage_gpteval": ["llava_onevision_tiles"],
     "VASTbench_gt1mininterval_gpteval": ["moviechat"],
     "VASTbench_gtinterval_gpteval": ["llava_nextvideo_tiles"],
-    "VASTbench_fullvideo_gpteval": ["sequential_llava_vid"],
+    "VASTbench_fullvideo_gpteval": ["it_sampling_llava_vid"],
     "VASTbench_gtinterval_loglikelihood": ["llama"],
     "VASTbench_gtinterval_loglikelihood_gpteval": ["llava_nextvideo"]
 }
