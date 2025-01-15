@@ -218,11 +218,12 @@ class SequentialEnd(lmms):
                 if confidence > best_confidence:
                     best_outputs = outputs
                     best_confidence = confidence
+                    window2answer = [window_start-self.window_span, window_start]
                 if window_start >= video_time:
                     finished_video = True
             
             best_outputs["num_inferences"] = num_inferences
-            best_outputs["window2answer"] = [window_end, window_end-self.window_span]
+            best_outputs["window2answer"] = window2answer
             res.append(best_outputs)
                 
             pbar.update(1)

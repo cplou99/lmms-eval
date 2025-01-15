@@ -2,6 +2,7 @@ from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
 import torch
+import time
 import sys
 from accelerate import Accelerator, DistributedType, InitProcessGroupKwargs
 from accelerate.state import AcceleratorState
@@ -244,6 +245,7 @@ class LongVU(lmms):
                 )
             sentence = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
             torch.cuda.empty_cache()  # Call after processing a batch or large tensor
+            time.sleep(3)
             print("Generated sentence:", sentence)
             pbar.update(1)
             res.append(sentence)

@@ -48,8 +48,8 @@ class GPT4V(lmms):
         self,
         model_version: str = "gpt-4o",
         modality: str = "video",
-        max_frames_num: int = 256,
-        timeout: int = 120,
+        max_frames_num: int = 250,
+        timeout: int = 600,
         continual_mode: bool = False,
         response_persistent_folder: str = None,
         detail: str = "low",
@@ -202,13 +202,14 @@ class GPT4V(lmms):
         
         return response_dict
 
-    def inference_format(self, resp_format, messages):
+    def inference_format(self, resp_format, messages, logprobs=False):
         from openai import OpenAI
         client = OpenAI()
         completion = client.beta.chat.completions.parse(
             model=self.model_version,
             messages=messages,
             response_format=resp_format,
+            logprobs=logprobs
         )
 
         return completion

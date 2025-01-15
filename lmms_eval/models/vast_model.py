@@ -74,8 +74,7 @@ class VAST(lmms):
         vlm_config: str,
         llm_reasoning_name: str,
         llm_reasoning_config: str,
-        frames_sampling_strategy: Optional[str] = "ffmpeg_keyframes", # ffmpeg_keyframes, resnet_keyframes
-        conf_thres: Optional[int] = 0.9,
+        frames_sampling_strategy: Optional[str] = "uniform", # ffmpeg_keyframes, resnet_keyframes
         max_num_vqa_inf: Optional[int] = 90,
         min_window_duration: Optional[int] = 5,
         add_time_instruction: Optional[bool] = False,
@@ -88,6 +87,7 @@ class VAST(lmms):
         ffmpeg_width_res: Optional[int] = 128,
         uniform_maxwindow2caption: Optional[int] = 60,
         uniform_minwindow2caption: Optional[int] = 5,
+        llm_return_logprobs: Optional[bool] = True,
         batch_size: Optional[int] = 1, 
         vlm_device: Optional[str] = "cuda",
         llm_reasoning_device: Optional[str] = "cuda",
@@ -126,6 +126,7 @@ class VAST(lmms):
         self.vlm_max_frames_num = self.vlm.max_frames_num
         # self.vlm_caption_prompt = "Provide a detailed caption of this clip."
         self.vlm_caption_prompt = "Provide 5 unique actions or events that could distinguish this clip from the rest of the video. 15 words maximum."
+        self.vlm_description_prompt = "Provide a general description of the video."
         self.vlm_caption_max_new_tokens = vlm_caption_max_new_tokens
 
         llm_reasoning_ModelClass = get_model(self.llm_reasoning_name)
@@ -143,9 +144,12 @@ class VAST(lmms):
         self.llm_reasoning_prompt2 = "Identify and return the top5 scenes from the list above that are most likely to contain the visual information needed to answer the question."
         
         self.llm_resp_format = VideoReasoning
+        self.llm_return_logprobs = llm_return_logprobs
         self.max_num_vqa_inf = max_num_vqa_inf
         self.frames_sampling_strategy = frames_sampling_strategy   
-        self.conf_thres = conf_thres
+        self.conf_thres = None
+        self.conf_thres_w_options = 0.9
+        self.conf_thres_wo_options = 0.8
         self.min_window_duration = min_window_duration
 
         self.ffmpeg_scene_threshold = ffmpeg_scene_threshold
@@ -193,7 +197,60 @@ class VAST(lmms):
                 print(f"Failed to read frame at path: {frame_path}")
         return video
 
-    def load_video(self, video_file, max_num_frames, window_time=None):
+    def split_frame_into_tiles(self, frame, num_tiles):
+        """
+        Splits a frame into a specified number of tiles based on the frame's shape.
+
+        Args:
+            frame (numpy.ndarray): The frame to split.
+            num_tiles (int): The total number of tiles to create.
+
+        Returns:
+            list: A list of tiles, each as a numpy.ndarray.
+        """
+        height, width, _ = frame.shape
+
+        # Determine the number of rows and columns based on the aspect ratio and num_tiles
+        aspect_ratio = width / height
+        cols = int((num_tiles * aspect_ratio) ** 0.5)
+        rows = num_tiles // cols
+
+        # Adjust rows and columns if needed to match the exact number of tiles
+        while rows * cols < num_tiles:
+            cols += 1
+            if rows * cols > num_tiles:
+                rows += 1
+
+        tile_height = height // rows
+        tile_width = width // cols
+
+        tiles = []
+        for i in range(rows):
+            for j in range(cols):
+                if len(tiles) >= num_tiles:
+                    break
+                # Calculate the boundaries for each tile
+                start_row = i * tile_height
+                end_row = (i + 1) * tile_height if i != rows - 1 else height
+                start_col = j * tile_width
+                end_col = (j + 1) * tile_width if j != cols - 1 else width
+
+                # Extract the tile
+                tile = frame[start_row:end_row, start_col:end_col]
+                tiles.append(tile)
+
+        return tiles
+
+    def resize_frame(self, frame, size=(384, 384)):
+        """
+        Resizes a frame to the given size using PIL.Image.
+        """
+        image = Image.fromarray(frame)  # Convert NumPy array to PIL Image
+        resized_image = image.resize(size, Image.BICUBIC)  # Resize to target size
+        return np.array(resized_image)  # Convert back to NumPy array
+    
+
+    def load_video(self, video_file, max_num_frames, window_time=None, num_tiles=None):
         from decord import VideoReader
 
         vr = VideoReader(video_file, ctx=cpu(0), num_threads=1)
@@ -220,6 +277,24 @@ class VAST(lmms):
             frames = frames.asnumpy()
         frame_timestamps = [frame_index / fps for frame_index in frame_indices]
         frame_timestamps = ",".join([f"{i:.2f}s" for i in frame_timestamps])
+
+
+        if num_tiles is not None:
+            # For each frame, split into tiles and include the resized original frame and tiles
+            all_frames_with_tiles = []
+            for frame in frames:
+                # Resize the original frame
+                resized_frame = self.resize_frame(frame)
+                # Split into tiles
+                tiles = self.split_frame_into_tiles(frame, num_tiles=num_tiles)
+                # Resize each tile
+                resized_tiles = [self.resize_frame(tile) for tile in tiles]
+                # Append the resized original frame and its resized tiles
+                all_frames_with_tiles.append(resized_frame)
+                all_frames_with_tiles.extend(resized_tiles)
+
+            frames = np.array(all_frames_with_tiles)  # Convert to a NumPy array
+
         return frames, frame_timestamps, video_time
 
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
@@ -244,6 +319,23 @@ class VAST(lmms):
         video_info = {"fps": fps, "total_duration": video_time}
         return video_info
 
+    # Function to extract cliptimeinterval sublists and compute probabilities
+    def extract_cliptimeintervals(self, logprobs_content):
+        cliptimeintervals = []
+        current_interval = None
+
+        for token in logprobs_content:
+            if token["token"] == "interval":  # Start of a cliptimeinterval
+                current_interval = []
+            if current_interval is not None:
+                current_interval.append(token)
+            if token["token"] in ["}}", "}},", "}}."]:  # End of a cliptimeinterval
+                if current_interval is not None:
+                    cliptimeintervals.append(current_interval)
+                current_interval = None
+
+        return cliptimeintervals
+
     def get_confidence_from_outputs(self, outputs, choices_in_question=False):
         num_tokens = outputs["num_tokens"]
         tokens = outputs["tokens"]
@@ -262,7 +354,18 @@ class VAST(lmms):
         
         return conf
     
-
+    def get_numframes_and_numtiles_from_window(self, window_length):
+        if window_length >= 60:
+            num_frames = self.vlm_max_frames_num
+            num_tiles = None
+        elif window_length >= 10:
+            num_frames = 12
+            num_tiles = 2
+        else:
+            num_frames = 6
+            num_tiles = 6
+        return num_frames, num_tiles
+    
     def extract_keyframes_ffmpeg(self, video_path, video_info, start_time, end_time, scene_threshold, skip_frames, width_res):
         scale_filter = f"scale={width_res}:-1"
         command = [
@@ -406,7 +509,7 @@ class VAST(lmms):
         times_and_inferences["num_caption_inferences"] += num_inferences
         times_and_inferences["caption_time"] += caption_time   
 
-        captions_window = [f"[{w[0]}s-{w[1]}s]: " + all_captions_dict[f"[{w[0]}s-{w[1]}s]"] for w in smallwindows]
+        captions_window = [f" [{w[0]}s-{w[1]}s]: [" + all_captions_dict[f"[{w[0]}s-{w[1]}s]"].replace("1.", "").replace("2.", "").replace("3.", "").replace("4.", "").replace("5.", "").replace("\n", "") + "] " for w in smallwindows]
         return captions_window
 
 
@@ -416,6 +519,7 @@ class VAST(lmms):
         all_captions = self.generate_captions(video_path, video_info, window_start, window_end, explored_windows, times_and_inferences, gen_kwargs)
         # complete_context = f"{self.llm_reasoning_prompt1}. Question: {contexts}. Captions: {all_captions}. {self.llm_reasoning_prompt2}"
         all_captions = "\n".join(all_captions)
+        video_description_and_question = f"{video_info['video_description']}. The question to be answered is: {context}"
         messages = [
                 {"role": "system", "content": self.llm_reasoning_prompt1},
                 {"role": "user", "content": context},
@@ -424,11 +528,15 @@ class VAST(lmms):
             ]
 
         t_llm_init = time.time()
-        completion = self.llm_reasoning.inference_format(self.llm_resp_format, messages)
+        completion = self.llm_reasoning.inference_format(self.llm_resp_format, messages, self.llm_return_logprobs)
         times_and_inferences["num_llm_inferences"] += 1
         times_and_inferences["llm_reasoning_time"] += time.time() - t_llm_init
         times_and_inferences["llm_tokens_usage"] += completion.usage.total_tokens
         response = completion.choices[0].message
+        if self.llm_return_logprobs:
+            logprobs_content = [{"token": lp.token, "prob": np.exp(lp.logprob)} for lp in completion.choices[0].logprobs.content]
+            intervals_probs = self.extract_cliptimeintervals(logprobs_content)
+
         scenes = [
             {
                 "explanation": scene.explanation,
@@ -437,20 +545,39 @@ class VAST(lmms):
             }
             for scene in response.parsed.scenes
         ]
-        new_candidates = []
-        for scene in scenes:
+        new_candidates, new_candidates_conf = [], []
+        for i, scene in enumerate(scenes):
             try:
                 # new_candidate = [float(scene["time"].split("-")[0].replace("[", "").replace("s", "").strip()), float(scene["time"].split("-")[1].replace("]", "").replace("s", "").strip())]
                 new_candidate = [scene["time"].start, scene["time"].end]
                 new_candidates.append(new_candidate)
+                if self.llm_return_logprobs:
+                    interval_probs = [interval_probs["prob"] for interval_probs in intervals_probs[i]]
+                    interval_conf = math.prod(interval_probs)
+                    new_candidates_conf.append(interval_conf)
             except Exception as e:
                 print(f"Error parsing scene: {scene}")
                 print(e)
-        return new_candidates
+        
+        seen = set()
+        unique_new_candidates = []
+        for candidate in new_candidates:
+            t = tuple(candidate)  # Convert to tuple for hashable type
+            if t not in seen:
+                seen.add(t)  # Add the tuple to the seen set
+                unique_new_candidates.append(candidate)  # Append the original list version
+
+        return unique_new_candidates
 
     def generate_until(self, requests) -> List[str]:
         res = []
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
+        task_name = requests[0].args[-2]
+        
+        if "gpteval" in task_name:
+            self.conf_thres = self.conf_thres_wo_options
+        else:
+            self.conf_thres = self.conf_thres_w_options
 
         for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
 
@@ -477,7 +604,9 @@ class VAST(lmms):
             video_path = visuals[0]
             video_info = self.get_video_info(video_path)
             
-            candidates = [[0,  video_info["total_duration"]]]
+            initial_window = [0, video_info["total_duration"]]
+            candidates = [initial_window]
+            llm_weights = [0]
             candidates2reason = []
 
             num_inferences = 0
@@ -490,12 +619,19 @@ class VAST(lmms):
             while best_confidence < self.conf_thres:
                 print(f"Exploring window {candidates[0]} in the video with total duration {video_info['total_duration']}")
                 window_candidate = candidates.pop(0)
+                # llm_weight = llm_weights.pop(0)
+
                 window_candidate_duration = window_candidate[1] - window_candidate[0]
                 t_vqa_init = time.time()
                 try:
-                    frames, frames_times, video_time = self.load_video(video_path, self.vlm_max_frames_num, window_time=window_candidate)
+                    num_frames, num_tiles = self.get_numframes_and_numtiles_from_window(window_candidate_duration)
+                    frames, frames_times, video_time = self.load_video(video_path, max_num_frames=num_frames, window_time=window_candidate, num_tiles=num_tiles)
                     if self.add_time_instruction:
-                        time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(frames)} frames are uniformly sampled from the clip {window_time}. These frames are located at {frames_times}.Please answer the following questions related to this video."
+                        if self.num_tiles is not None: 
+                            sent_tiles = f" with {self.num_tiles} tiles per frame"
+                        else: 
+                            sent_tiles = ""
+                        time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(frames)} frames are uniformly sampled from it. These frames are located at {frames_times}{sent_tiles}.Please answer the following questions related to this video."
                         contexts = f"{time_instruciton}\n{contexts}"
                 
                 except Exception as e:
@@ -506,6 +642,12 @@ class VAST(lmms):
                     pbar.update(1)
                     continue
                 
+                if window_candidate == initial_window:
+                    vlm_video_description = self.vlm.inference(frames, self.vlm_description_prompt, gen_kwargs)
+                    video_description = f"The video lasts for {video_time//60:.2f} minutes. {vlm_video_description}"
+                    video_info["video_description"] = video_description
+                    # candidates2reason.append(window_candidate)
+                
                 if len(frames) == 0:
                     print(f"No frames loaded for window {window_candidate} in video {video_path} of total duration {video_info['total_duration']}")
                     times_and_inferences["vqa_time"] += time.time() - t_vqa_init
@@ -515,6 +657,7 @@ class VAST(lmms):
                     confidence = self.get_confidence_from_outputs(outputs, choices_in_question)
                     times_and_inferences["num_vqa_inferences"] += 1
                     times_and_inferences["vqa_time"] += time.time() - t_vqa_init
+                    # prob2reason = confidence + llm_weight
 
                     if confidence > best_confidence:
                         best_outputs = outputs
@@ -524,6 +667,7 @@ class VAST(lmms):
                     if best_confidence > self.conf_thres:
                         print(f"Confidence threshold reached after {num_inferences} inferences, breaking")
                         break
+                    # elif window_candidate_duration > self.min_window_duration and prob2reason >= best_confidence:
                     elif window_candidate_duration > self.min_window_duration:
                         candidates2reason.append(window_candidate)
                 
@@ -540,9 +684,10 @@ class VAST(lmms):
                         window_reason = candidates2reason.pop(0)
                     
                     candidates = self.generate_candidates_with_llm_reasoning(video_path, video_info, contexts, window_reason, explored_windows, times_and_inferences, gen_kwargs)
-                    
+                    # num_candidates = len(candidates) + len(explored_windows)
+                    # llm_weights = [i/np.sum(np.arange(num_candidates)) for i in range(num_candidates)][::-1][-len(candidates):]
                     if window_reason == [0, video_info["total_duration"]]:
-                        explored_windows.extend(candidates)
+                        explored_windows.append(candidates)
 
                     if len(candidates) == 0:
                         print(f"NO CANDIDATES. FAIL? AFTER {num_inferences} INFERENCES")
