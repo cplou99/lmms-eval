@@ -92,7 +92,7 @@ class LlavaVid(lmms):
         truncate_context=False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         max_frames_num: int = 3,
         video_fps: int = 1,
-        tiles: bool = False,
+        num_tiles: int = None,
         mm_resampler_type: str = "spatial_pool",
         mm_spatial_pool_stride: int = 2,
         mm_spatial_pool_out_channels: int = 1024,
@@ -134,7 +134,7 @@ class LlavaVid(lmms):
         self.mm_spatial_pool_out_channels = int(mm_spatial_pool_out_channels)
         self.mm_spatial_pool_mode = mm_spatial_pool_mode
         self.max_frames_num = int(max_frames_num)
-        self.tiles = tiles
+        self.num_tiles = num_tiles
         self.fps = int(video_fps)
         self.mm_resampler_location = mm_resampler_location
         self.delay_load = delay_load
@@ -310,20 +310,49 @@ class LlavaVid(lmms):
                 print(f"Failed to read frame at path: {frame_path}")
         return video
 
-    def split_frame_into_tiles(self, frame):
+    def split_frame_into_tiles(self, frame, num_tiles):
         """
-        Splits a frame into four equal tiles (top-left, top-right, bottom-left, bottom-right).
+        Splits a frame into a specified number of tiles based on the frame's shape.
+
+        Args:
+            frame (numpy.ndarray): The frame to split.
+            num_tiles (int): The total number of tiles to create.
+
+        Returns:
+            list: A list of tiles, each as a numpy.ndarray.
         """
         height, width, _ = frame.shape
-        mid_h, mid_w = height // 2, width // 2
 
-        # Define the four tiles
-        top_left = frame[0:mid_h, 0:mid_w]
-        top_right = frame[0:mid_h, mid_w:width]
-        bottom_left = frame[mid_h:height, 0:mid_w]
-        bottom_right = frame[mid_h:height, mid_w:width]
+        # Determine the number of rows and columns based on the aspect ratio and num_tiles
+        aspect_ratio = width / height
+        cols = int((num_tiles * aspect_ratio) ** 0.5)
+        rows = num_tiles // cols
 
-        return [top_left, top_right, bottom_left, bottom_right]
+        # Adjust rows and columns if needed to match the exact number of tiles
+        while rows * cols < num_tiles:
+            cols += 1
+            if rows * cols > num_tiles:
+                rows += 1
+
+        tile_height = height // rows
+        tile_width = width // cols
+
+        tiles = []
+        for i in range(rows):
+            for j in range(cols):
+                if len(tiles) >= num_tiles:
+                    break
+                # Calculate the boundaries for each tile
+                start_row = i * tile_height
+                end_row = (i + 1) * tile_height if i != rows - 1 else height
+                start_col = j * tile_width
+                end_col = (j + 1) * tile_width if j != cols - 1 else width
+
+                # Extract the tile
+                tile = frame[start_row:end_row, start_col:end_col]
+                tiles.append(tile)
+
+        return tiles
 
     def resize_frame(self, frame, size=(384, 384)):
         """
@@ -333,8 +362,7 @@ class LlavaVid(lmms):
         resized_image = image.resize(size, Image.BICUBIC)  # Resize to target size
         return np.array(resized_image)  # Convert back to NumPy array
 
-
-    def load_video(self, video_path, max_frames_num, fps, force_sample=False, tiles=False):
+    def load_video(self, video_path, max_frames_num, fps, force_sample=False, num_tiles=None):
         if max_frames_num == 0:
             return np.zeros((1, 336, 336, 3))
         vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
@@ -352,14 +380,14 @@ class LlavaVid(lmms):
         spare_frames = vr.get_batch(frame_idx).asnumpy()
         # import pdb;pdb.set_trace()
 
-        if tiles:
+        if num_tiles is not None:
             # For each frame, split into tiles and include the resized original frame and tiles
             all_frames_with_tiles = []
             for frame in spare_frames:
                 # Resize the original frame
                 resized_frame = self.resize_frame(frame)
                 # Split into tiles
-                tiles = self.split_frame_into_tiles(resized_frame)
+                tiles = self.split_frame_into_tiles(frame, num_tiles=num_tiles)
                 # Resize each tile
                 resized_tiles = [self.resize_frame(tile) for tile in tiles]
                 # Append the resized original frame and its resized tiles
@@ -387,7 +415,7 @@ class LlavaVid(lmms):
             visuals = self.flatten(visuals)
             videos = []
             for visual in visuals:
-                video, frame_time, video_time = self.load_video(visual, self.max_frames_num, self.fps, force_sample=self.force_sample, tiles=self.tiles)
+                video, frame_time, video_time = self.load_video(visual, self.max_frames_num, self.fps, force_sample=self.force_sample, num_tiles=self.num_tiles)
                 video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
                 if self.torch_dtype == "bfloat16":
                     video = video.bfloat16()
@@ -463,7 +491,7 @@ class LlavaVid(lmms):
                 # for visual in visuals:
                 if len(visuals) == 1:
                     if self.video_decode_backend == "decord":
-                        video, frame_time, video_time = self.load_video(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample, tiles=self.tiles)
+                        video, frame_time, video_time = self.load_video(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample, num_tiles=self.num_tiles)
                     elif self.video_decode_backend == "pyav":
                         video, frame_time, video_time = read_video_pyav(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
                     elif self.video_decode_backend == "image":
@@ -506,8 +534,10 @@ class LlavaVid(lmms):
             qs = contexts
             # import pdb;pdb.set_trace()
             if self.add_time_instruction:
-                if self.tiles: sent_tiles = "with 4 tiles per frame"
-                else: sent_tiles = ""
+                if self.num_tiles is not None: 
+                    sent_tiles = f"with {self.num_tiles} tiles per frame"
+                else: 
+                    sent_tiles = ""
                 time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video)} frames are uniformly sampled from it. These frames are located at {frame_time} {sent_tiles}.Please answer the following questions related to this video."
                 qs = f"{time_instruciton}\n{qs}"
             if self.model.config.mm_use_im_start_end:

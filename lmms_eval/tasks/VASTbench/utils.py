@@ -97,6 +97,13 @@ def VASTbench_doc_to_visual_gt1mininterval(doc):
     gt_interval_path = os.path.join(gt_interval_dir, gt_interval_name)+".mp4"
     return [gt_interval_path]
 
+
+def VASTbench_doc_to_visual_gt5secinterval(doc):
+    gt_interval_dir = yaml.safe_load("../VASTbench_lmmseval/gt_intervals_5sec")
+    gt_interval_name = doc["question_id"]
+    gt_interval_path = os.path.join(gt_interval_dir, gt_interval_name)+".mp4"
+    return [gt_interval_path]
+
 def VASTbench_doc_to_visual_fullvideo(doc):
     video_name = os.path.join(doc["path"], doc["video_names"][0]) 
     return [video_name]

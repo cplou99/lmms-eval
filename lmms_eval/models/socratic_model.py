@@ -208,18 +208,21 @@ class Socratic(lmms):
         
         for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
             visuals = doc_to_visual(self.task_dict[task][split][doc_id])
-
+            fps, video_time = self.get_video_info(visuals[0])
             filename = visuals[0].split("/")[-1].split(".")[0]
             if self.load_captions and filename in self.captions:
-                all_captions_dict = self.captions[filename]["captions"]
+                captions_dict = self.captions[filename]["captions"]
                 num_inferences = self.captions[filename]["num_inferences"]
                 caption_time = self.captions[filename]["total_time"]
-            
+                num_windows = math.ceil(video_time / self.window_span)
+                all_windows = [f"[{k*self.window_span}s-{(k+1)*self.window_span}s]" for k in range(num_windows)]
+                all_captions_dict = {key: captions_dict[key] for key in all_windows if key in captions_dict}
+                print("Number of inferences", num_inferences, "Number of windows that should have been infered", num_windows, "Number of captions in the file", len(captions_dict), "Number of captions taken from the file", len(all_captions_dict))
+
             else:
                 window_start, window_end = 0.0, self.window_span
                 num_inferences = 0
                 all_captions_dict = {}
-                fps, video_time = self.get_video_info(visuals[0])
 
                 gen_kwargs["max_new_tokens"] = self.vlm_caption_max_new_tokens
                 t0 = time.time()

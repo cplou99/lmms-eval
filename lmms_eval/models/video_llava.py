@@ -9,7 +9,7 @@ from accelerate.state import AcceleratorState
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoConfig
-
+from decord import VideoReader, cpu
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
@@ -178,6 +178,26 @@ class VideoLLaVA(lmms):
                 new_list.append(j)
         return new_list
 
+    def load_video(self, video_path, max_frames_num, fps=1, force_sample=False):
+        if max_frames_num == 0:
+            return np.zeros((1, 336, 336, 3))
+        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        total_frame_num = len(vr)
+        video_time = total_frame_num / vr.get_avg_fps()
+        fps = round(vr.get_avg_fps() / fps)
+        frame_idx = [i for i in range(0, len(vr), fps)]
+        frame_time = [i / fps for i in frame_idx]
+        if len(frame_idx) > max_frames_num or force_sample:
+            sample_fps = max_frames_num
+            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
+            frame_idx = uniform_sampled_frames.tolist()
+            frame_time = [i / vr.get_avg_fps() for i in frame_idx]
+        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
+        spare_frames = vr.get_batch(frame_idx).asnumpy()
+        # import pdb;pdb.set_trace()
+
+        return spare_frames, frame_time, video_time
+    
     def generate_until(self, requests) -> List[str]:
         res = []
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
@@ -187,7 +207,8 @@ class VideoLLaVA(lmms):
             visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
             visuals = self.flatten(visuals)
             assert len(visuals) == 1
-            clip = read_video_pyav(visuals[0], self.num_frames)
+            # clip = read_video_pyav(visuals[0], self.num_frames)
+            clip, frames_time, video_time = self.load_video(visuals[0], self.num_frames)
 
             inputs = self._processor(text=self.prompt.format(contexts), videos=clip, return_tensors="pt")
             pixel_values_videos = inputs["pixel_values_videos"]

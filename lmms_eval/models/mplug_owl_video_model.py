@@ -7,7 +7,9 @@ from accelerate.state import AcceleratorState
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-
+from PIL import Image
+import numpy as np
+from decord import VideoReader, cpu    # pip install decord
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
@@ -18,20 +20,23 @@ from lmms_eval.models.mplug_owl_video.processing_mplug_owl import (
     MplugOwlImageProcessor,
     MplugOwlProcessor,
 )
-
+from modelscope import AutoConfig, AutoModel, AutoTokenizer
 eval_logger = logger
 
 
-@register_model("mplug_owl_video")
+@register_model("mplug_owl_video_model")
 class mplug_Owl(lmms):
     def __init__(
         self,
         pretrained: str = "MAGAer13/mplug-owl-llama-7b-video",
+        num_frames: Union[str, int] = 4,
         device: Optional[str] = "cuda:0",
+        device_map: Optional[str] = "auto",
+        attn_implementation=(
+            "sdpa" if torch.__version__ >= "2.1.2" else "eager"
+        ),
         dtype: Optional[Union[str, torch.dtype]] = "auto",
         batch_size: Optional[Union[int, str]] = 1,
-        device_map="cuda:0",
-        num_frames: Union[str, int] = 4,
         **kwargs,
     ) -> None:
         """
@@ -63,13 +68,19 @@ class mplug_Owl(lmms):
         # for transformers == 4.39.1, object type not serializable
         # Protobuf needs to be in 3.20.x otherwise error
         # ヽ(｀Д´)ﾉ
-        self._model = MplugOwlForConditionalGeneration.from_pretrained(
+
+        self._model = AutoModel.from_pretrained(
             pretrained,
-            torch_dtype=torch.bfloat16,
+            attn_implementation=attn_implementation,
+            torch_dtype=torch.half,
+            trust_remote_code=True
         )
-        self.image_processor = MplugOwlImageProcessor.from_pretrained(pretrained)
+        
+        self._config = AutoConfig.from_pretrained(pretrained, trust_remote_code=True)
         self._tokenizer = AutoTokenizer.from_pretrained(pretrained)
-        self.processor = MplugOwlProcessor(self.image_processor, self.tokenizer)
+        self.image_processor = self._model.init_processor(self._tokenizer)
+
+        # self.processor = MplugOwlProcessor(self.image_processor, self.tokenizer)
         self.model.eval()
         self.batch_size_per_gpu = batch_size
         self.num_frames = num_frames
@@ -152,9 +163,41 @@ class mplug_Owl(lmms):
                 new_list.append(j)
         return new_list
 
-    def format_prompt(self, question):
-        prompts = [f" <|video|> Question : {question} Answer : "]
-        return prompts
+    def format_prompt(self, question, data_type):
+        if data_type == "image":
+            token = "<|image|>"
+        elif data_type == "video":
+            token = "<|video|>"
+        else:
+            raise ValueError("Invalid data type")
+        
+        messages = [
+            {"role": "user", "content": f"""{token} {question}."""},
+            {"role": "assistant", "content": ""}
+        ]
+        return messages
+
+    def load_video(self, video_path, max_frames_num, fps, force_sample=False):
+        if max_frames_num == 0:
+            return np.zeros((1, 336, 336, 3))
+        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        total_frame_num = len(vr)
+        video_time = total_frame_num / vr.get_avg_fps()
+        fps = round(vr.get_avg_fps() / fps)
+        frame_idx = [i for i in range(0, len(vr), fps)]
+        frame_time = [i / fps for i in frame_idx]
+        if len(frame_idx) > max_frames_num or force_sample:
+            sample_fps = max_frames_num
+            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
+            frame_idx = uniform_sampled_frames.tolist()
+            frame_time = [i / vr.get_avg_fps() for i in frame_idx]
+        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
+        spare_frames = vr.get_batch(frame_idx).asnumpy()
+        spare_frames = [Image.fromarray(v.astype('uint8')) for v in spare_frames]
+        # import pdb;pdb.set_trace()
+
+        return spare_frames, frame_time, video_time
+    
 
     def generate_until(self, requests) -> List[str]:
         res = []
@@ -164,15 +207,20 @@ class mplug_Owl(lmms):
             # encode, pad, and truncate contexts for this batch
             visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
             visuals = self.flatten(visuals)
-            inputs = self.processor(text=self.format_prompt(contexts), videos=visuals, num_frames=self.num_frames, return_tensors="pt")
-            pixel_values_videos = inputs["video_pixel_values"]
-            if pixel_values_videos.shape[2] != self.num_frames:
-                empty_frames = torch.zeros((1, pixel_values_videos.shape[1], self.num_frames - pixel_values_videos.shape[2], *pixel_values_videos.shape[3:]), dtype=pixel_values_videos.dtype)
-                pixel_values_videos = torch.cat([pixel_values_videos, empty_frames], dim=2)
-                inputs["video_pixel_values"] = pixel_values_videos
-            inputs = {k: v.bfloat16() if v.dtype == torch.float else v for k, v in inputs.items()}
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
+            
+            if type(visuals[0]) == Image.Image:
+                image = visuals[0]
+                messages = self.format_prompt(contexts, "image")
+                inputs = self.image_processor(messages, images=[image], videos=None)
+            elif type(visuals[0]) == str:
+                video_frames, frame_time, video_time = self.load_video(visuals[0], self.num_frames, 1, force_sample=False)
+                messages = self.format_prompt(contexts, "video")
+                inputs = self.image_processor(messages, images=None, videos=[video_frames])
+            else:
+                raise ValueError("Invalid type for visuals")
+            
+            inputs.to(self.device)
             if "max_new_tokens" in gen_kwargs:
                 gen_kwargs["max_length"] = gen_kwargs["max_new_tokens"]
             if "max_new_tokens" not in gen_kwargs:
@@ -182,13 +230,25 @@ class mplug_Owl(lmms):
             if "top_k" not in gen_kwargs:
                 gen_kwargs["top_k"] = 1
 
-            generate_kwargs = {"do_sample": gen_kwargs["do_sample"], "top_k": gen_kwargs["top_k"], "max_length": gen_kwargs["max_length"]}
+            inputs.update({
+                'tokenizer': self.tokenizer,
+                'max_new_tokens': gen_kwargs["max_new_tokens"],
+                'decode_text':True,
+            })
+            # pixel_values_videos = inputs["video_pixel_values"]
+            # if pixel_values_videos.shape[2] != self.num_frames:
+                # empty_frames = torch.zeros((1, pixel_values_videos.shape[1], self.num_frames - pixel_values_videos.shape[2], *pixel_values_videos.shape[3:]), dtype=pixel_values_videos.dtype)
+                # pixel_values_videos = torch.cat([pixel_values_videos, empty_frames], dim=2)
+                # inputs["video_pixel_values"] = pixel_values_videos
+            # inputs = {k: v.bfloat16() if v.dtype == torch.float else v for k, v in inputs.items()}
+            # inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
             with torch.no_grad():
-                outputs = self.model.generate(**inputs, **generate_kwargs)
-            sentence = self.tokenizer.decode(outputs.tolist()[0], skip_special_tokens=True)
+                sentence = self.model.generate(**inputs)
+            # sentence = self.tokenizer.decode(outputs.tolist()[0], skip_special_tokens=True)
+            print("Generated sentence:", sentence[0])
             pbar.update(1)
-            res.append(sentence)
+            res.append(sentence[0])
         pbar.close()
         return res
 

@@ -26,10 +26,10 @@ try:
     import sys
     sys.path.append("../lmms-eval/lmms_eval/models/VILA")
     from llava.constants import (
-        DEFAULT_IM_END_TOKEN,
-        DEFAULT_IM_START_TOKEN,
+        # DEFAULT_IM_END_TOKEN,
+        # DEFAULT_IM_START_TOKEN,
         DEFAULT_IMAGE_TOKEN,
-        IMAGE_TOKEN_INDEX,
+        # IMAGE_TOKEN_INDEX,
     )
     from llava.conversation import SeparatorStyle, conv_templates
     # from llava.data.dataset import LazySupervisedDataset
