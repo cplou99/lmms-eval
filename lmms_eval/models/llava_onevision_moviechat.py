@@ -41,7 +41,7 @@ try:
     import sys
     import importlib
     import llava
-    sys.path.insert(0, "//home/cplou/PycharmProjects/VLM/lmms-eval/lmms_eval/models/MovieChat/MovieChat_Onevision/")
+    sys.path.insert(0, "/disk/VAST/lmms-eval/lmms_eval/models/MovieChat/MovieChat_Onevision/")
     importlib.reload(llava)
     from lmms_eval.models.MovieChat.MovieChat_Onevision.llava.constants import (
         DEFAULT_IM_END_TOKEN,

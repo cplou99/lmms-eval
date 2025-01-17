@@ -27,7 +27,7 @@ def run_model_evaluation(models_dict, selected_models, num_processes=8, num_mach
         if "output_path" in model_config.keys():
             output_path = model_config["output_path"] 
         else:
-            output_path = "//home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/"
+            output_path = "/disk/VAST/VASTbench_lmmseval/logs/"
 
         num_params = int(1e7)
         # Construct the command
@@ -101,35 +101,35 @@ models_dict = {
         "model_name": "llava_vid",
         "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=42,mm_spatial_pool_mode=average",
         "log_suffix": "llava_nextvideo.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-42frames"
+        "output_path": "disk/VAST/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-42frames"
         # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
     },
     "llava_nextvideo_2tiles": {
         "model_name": "llava_vid",
         "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=12,mm_spatial_pool_mode=average,num_tiles=2",
         "log_suffix": "llava_nextvideo.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-2tiles"
+        "output_path": "disk/VAST/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-2tiles"
         # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
     },
     "llava_nextvideo_4tiles": {
         "model_name": "llava_vid",
         "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=8,mm_spatial_pool_mode=average,num_tiles=4",
         "log_suffix": "llava_nextvideo.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-4tiles"
+        "output_path": "disk/VAST/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-4tiles"
         # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
     },
     "llava_nextvideo_6tiles": {
         "model_name": "llava_vid",
         "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=6,mm_spatial_pool_mode=average,num_tiles=6",
         "log_suffix": "llava_nextvideo.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-6tiles"
+        "output_path": "disk/VAST/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-6tiles"
         # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
     },
     "llava_nextvideo_8tiles": {
         "model_name": "llava_vid",
         "model_args": "pretrained=lmms-lab/LLaVA-Video-7B-Qwen2,conv_template=qwen_1_5,max_frames_num=4,mm_spatial_pool_mode=average,num_tiles=8",
         "log_suffix": "llava_nextvideo.VAST",
-        "output_path": "/home/cplou/PycharmProjects/VLM/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-8tiles"
+        "output_path": "disk/VAST/VASTbench_lmmseval/logs/lmms-lab__LLaVA-Video-7B-Qwen2-8tiles"
         # Max frames num is set to 32 to fit into 24Gb GPU memory but by default was 64
     },
     "llama": {
@@ -297,7 +297,7 @@ models_dict = {
     },
     "longvu_model": {
         "model_name": "longvu_model",
-        "model_args": "pretrained=/home/cplou/PycharmProjects/VLM/lmms-eval/lmms_eval/models/LongVU/checkpoints/LongVU_Qwen2_7B",
+        "model_args": "pretrained=disk/VAST/lmms-eval/lmms_eval/models/LongVU/checkpoints/LongVU_Qwen2_7B",
         "log_suffix": "longvu.VAST",
         "output_path": "/disk/VAST/VASTbench_lmmseval/logs/longvu"
     }

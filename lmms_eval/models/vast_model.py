@@ -519,7 +519,7 @@ class VAST(lmms):
         all_captions = self.generate_captions(video_path, video_info, window_start, window_end, explored_windows, times_and_inferences, gen_kwargs)
         # complete_context = f"{self.llm_reasoning_prompt1}. Question: {contexts}. Captions: {all_captions}. {self.llm_reasoning_prompt2}"
         all_captions = "\n".join(all_captions)
-        video_description_and_question = f"{video_info['video_description']}. The question to be answered is: {context}"
+        # video_description_and_question = f"{video_info['video_description']}. The question to be answered is: {context}"
         messages = [
                 {"role": "system", "content": self.llm_reasoning_prompt1},
                 {"role": "user", "content": context},
@@ -619,7 +619,7 @@ class VAST(lmms):
             while best_confidence < self.conf_thres:
                 print(f"Exploring window {candidates[0]} in the video with total duration {video_info['total_duration']}")
                 window_candidate = candidates.pop(0)
-                # llm_weight = llm_weights.pop(0)
+                llm_weight = llm_weights.pop(0)
 
                 window_candidate_duration = window_candidate[1] - window_candidate[0]
                 t_vqa_init = time.time()
@@ -642,10 +642,10 @@ class VAST(lmms):
                     pbar.update(1)
                     continue
                 
-                if window_candidate == initial_window:
-                    vlm_video_description = self.vlm.inference(frames, self.vlm_description_prompt, gen_kwargs)
-                    video_description = f"The video lasts for {video_time//60:.2f} minutes. {vlm_video_description}"
-                    video_info["video_description"] = video_description
+                # if window_candidate == initial_window:
+                    # vlm_video_description = self.vlm.inference(frames, self.vlm_description_prompt, gen_kwargs)
+                    # video_description = f"The video lasts for {video_time//60:.2f} minutes. {vlm_video_description}"
+                    #  video_info["video_description"] = video_description
                     # candidates2reason.append(window_candidate)
                 
                 if len(frames) == 0:
@@ -657,7 +657,7 @@ class VAST(lmms):
                     confidence = self.get_confidence_from_outputs(outputs, choices_in_question)
                     times_and_inferences["num_vqa_inferences"] += 1
                     times_and_inferences["vqa_time"] += time.time() - t_vqa_init
-                    # prob2reason = confidence + llm_weight
+                    prob2reason = confidence + llm_weight
 
                     if confidence > best_confidence:
                         best_outputs = outputs
@@ -667,8 +667,8 @@ class VAST(lmms):
                     if best_confidence > self.conf_thres:
                         print(f"Confidence threshold reached after {num_inferences} inferences, breaking")
                         break
-                    # elif window_candidate_duration > self.min_window_duration and prob2reason >= best_confidence:
-                    elif window_candidate_duration > self.min_window_duration:
+                    elif window_candidate_duration > self.min_window_duration and prob2reason >= best_confidence:
+                    # elif window_candidate_duration > self.min_window_duration:
                         candidates2reason.append(window_candidate)
                 
                 if len(candidates) == 0:
@@ -684,8 +684,9 @@ class VAST(lmms):
                         window_reason = candidates2reason.pop(0)
                     
                     candidates = self.generate_candidates_with_llm_reasoning(video_path, video_info, contexts, window_reason, explored_windows, times_and_inferences, gen_kwargs)
-                    # num_candidates = len(candidates) + len(explored_windows)
-                    # llm_weights = [i/np.sum(np.arange(num_candidates)) for i in range(num_candidates)][::-1][-len(candidates):]
+                    num_candidates = len(candidates) + len(explored_windows)
+                    llm_weights = [i/np.sum(np.arange(num_candidates)) for i in range(num_candidates)][::-1][-len(candidates):]
+                    print("New llm weights:", llm_weights)
                     if window_reason == [0, video_info["total_duration"]]:
                         explored_windows.append(candidates)
 
