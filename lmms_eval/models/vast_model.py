@@ -87,7 +87,7 @@ class VAST(lmms):
         ffmpeg_width_res: Optional[int] = 128,
         uniform_maxwindow2caption: Optional[int] = 60,
         uniform_minwindow2caption: Optional[int] = 5,
-        llm_return_logprobs: Optional[bool] = True,
+        llm_return_logprobs: Optional[bool] = False,
         batch_size: Optional[int] = 1, 
         vlm_device: Optional[str] = "cuda",
         llm_reasoning_device: Optional[str] = "cuda",
@@ -519,37 +519,59 @@ class VAST(lmms):
         all_captions = self.generate_captions(video_path, video_info, window_start, window_end, explored_windows, times_and_inferences, gen_kwargs)
         # complete_context = f"{self.llm_reasoning_prompt1}. Question: {contexts}. Captions: {all_captions}. {self.llm_reasoning_prompt2}"
         all_captions = "\n".join(all_captions)
-        video_description_and_question = f"{video_info['video_description']}. The question to be answered is: {context}"
+        # video_description_and_question = f"{video_info['video_description']}. The question to be answered is: {context}"
         messages = [
                 {"role": "system", "content": self.llm_reasoning_prompt1},
                 {"role": "user", "content": context},
                 {"role": "user", "content": all_captions},
                 {"role": "system", "content": self.llm_reasoning_prompt2}
             ]
+        self.dir_save_llm_reasonings = f"{os.path.dirname(os.getcwd())}/features/llm_reasonings"
+        os.makedirs(self.dir_save_llm_reasonings, exist_ok=True)
+        self.load_llm_reasons = True
+        self.save_llm_reasons = True
 
-        t_llm_init = time.time()
-        completion = self.llm_reasoning.inference_format(self.llm_resp_format, messages, self.llm_return_logprobs)
-        times_and_inferences["num_llm_inferences"] += 1
-        times_and_inferences["llm_reasoning_time"] += time.time() - t_llm_init
-        times_and_inferences["llm_tokens_usage"] += completion.usage.total_tokens
-        response = completion.choices[0].message
-        if self.llm_return_logprobs:
-            logprobs_content = [{"token": lp.token, "prob": np.exp(lp.logprob)} for lp in completion.choices[0].logprobs.content]
-            intervals_probs = self.extract_cliptimeintervals(logprobs_content)
+        video_name = os.path.basename(video_path).split('.')[0]  # Extract video name
+        video_llm_reasons_path = os.path.join(self.dir_save_llm_reasonings, f"{video_name}.json")
+        # Load existing data if the file exists
+        if os.path.exists(video_llm_reasons_path):
+            with open(video_llm_reasons_path, 'r') as f:
+                video_llm_reasons = json.load(f)
+        else:
+                video_llm_reasons = {}
 
-        scenes = [
-            {
-                "explanation": scene.explanation,
-                "time": scene.cliptimeinterval
-                
-            }
-            for scene in response.parsed.scenes
-        ]
+        messages_key = " ".join([message["content"] for message in messages])
+        if self.load_llm_reasons and messages_key in video_llm_reasons:
+            scenes = video_llm_reasons[messages_key]
+        else:
+            t_llm_init = time.time()
+            completion = self.llm_reasoning.inference_format(self.llm_resp_format, messages, self.llm_return_logprobs)
+            times_and_inferences["num_llm_inferences"] += 1
+            times_and_inferences["llm_reasoning_time"] += time.time() - t_llm_init
+            times_and_inferences["llm_tokens_usage"] += completion.usage.total_tokens
+            response = completion.choices[0].message
+            if self.llm_return_logprobs:
+                logprobs_content = [{"token": lp.token, "prob": np.exp(lp.logprob)} for lp in completion.choices[0].logprobs.content]
+                intervals_probs = self.extract_cliptimeintervals(logprobs_content)
+
+            scenes = [
+                {
+                    "explanation": scene.explanation,
+                    "time": [scene.cliptimeinterval.start, scene.cliptimeinterval.end]
+                    
+                }
+                for scene in response.parsed.scenes
+            ]
+            if self.save_llm_reasons:
+                video_llm_reasons[messages_key] = scenes
+                with open(video_llm_reasons_path, 'w') as f:
+                    json.dump(video_llm_reasons, f)
+
         new_candidates, new_candidates_conf = [], []
         for i, scene in enumerate(scenes):
             try:
                 # new_candidate = [float(scene["time"].split("-")[0].replace("[", "").replace("s", "").strip()), float(scene["time"].split("-")[1].replace("]", "").replace("s", "").strip())]
-                new_candidate = [scene["time"].start, scene["time"].end]
+                new_candidate = scene["time"]
                 new_candidates.append(new_candidate)
                 if self.llm_return_logprobs:
                     interval_probs = [interval_probs["prob"] for interval_probs in intervals_probs[i]]
@@ -642,10 +664,10 @@ class VAST(lmms):
                     pbar.update(1)
                     continue
                 
-                if window_candidate == initial_window:
-                    vlm_video_description = self.vlm.inference(frames, self.vlm_description_prompt, gen_kwargs)
-                    video_description = f"The video lasts for {video_time//60:.2f} minutes. {vlm_video_description}"
-                    video_info["video_description"] = video_description
+                # if window_candidate == initial_window:
+                    # vlm_video_description = self.vlm.inference(frames, self.vlm_description_prompt, gen_kwargs)
+                    # video_description = f"The video lasts for {video_time//60:.2f} minutes. {vlm_video_description}"
+                    # video_info["video_description"] = video_description
                     # candidates2reason.append(window_candidate)
                 
                 if len(frames) == 0:
@@ -690,10 +712,10 @@ class VAST(lmms):
                         explored_windows.append(candidates)
 
                     if len(candidates) == 0:
-                        print(f"NO CANDIDATES. FAIL? AFTER {num_inferences} INFERENCES")
+                        print(f"NO CANDIDATES. FAIL? AFTER {times_and_inferences['num_vqa_inferences']} INFERENCES")
                         break
             
-            print(f"Response to question {contexts} after {num_inferences} inferences with confidence {best_confidence} is: {best_outputs['response']} in window {best_window}")
+            print(f"Response to question {contexts} after {times_and_inferences['num_vqa_inferences']} inferences with confidence {best_confidence} is: {best_outputs['response']} in window {best_window}")
             t_end = time.time()
             total_time = t_end - t_init
             times_and_inferences["total_time"] = total_time
